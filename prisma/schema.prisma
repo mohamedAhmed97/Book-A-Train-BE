@@ -1,0 +1,221 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ──────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ATHLETE
+  COACH
+}
+
+enum SubscriptionTier {
+  FREE
+  PRO
+  ELITE
+}
+
+enum SessionStatus {
+  SCHEDULED
+  ONGOING
+  COMPLETED
+  CANCELLED
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+enum NotificationType {
+  SESSION_REMINDER
+  SESSION_ASSIGNED
+  SESSION_CANCELLED
+  FRIEND_REQUEST
+  FRIEND_ACCEPTED
+  WORKOUT_COMPLETED
+  COACH_MESSAGE
+}
+
+// ── User & Profiles ────────────────────────────────────────────────────────────
+
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  name         String
+  passwordHash String
+  role         Role
+  avatar       String?
+  phone        String?
+
+  athleteProfile   AthleteProfile?
+  coachProfile     CoachProfile?
+  sentRequests     Friendship[]    @relation("Requester")
+  receivedRequests Friendship[]    @relation("Addressee")
+  notifications    Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model AthleteProfile {
+  id    String  @id @default(cuid())
+  userId String @unique
+  sport  String?
+  bio    String?
+  goals  String?
+
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coachAthletes CoachAthlete[]
+  bookings      SessionBooking[]
+
+  @@map("athlete_profiles")
+}
+
+model CoachProfile {
+  id               String           @id @default(cuid())
+  userId           String           @unique
+  sport            String?
+  bio              String?
+  specialization   String?
+  subscriptionTier SubscriptionTier @default(FREE)
+  athleteLimit     Int              @default(5)
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coachAthletes CoachAthlete[]
+  sessions      Session[]
+
+  @@map("coach_profiles")
+}
+
+model CoachAthlete {
+  id        String @id @default(cuid())
+  coachId   String
+  athleteId String
+  addedAt   DateTime @default(now())
+
+  coach   CoachProfile   @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  @@unique([coachId, athleteId])
+  @@map("coach_athletes")
+}
+
+// ── Sessions & Exercises ───────────────────────────────────────────────────────
+
+model Session {
+  id              String        @id @default(cuid())
+  coachId         String
+  title           String
+  sport           String
+  description     String?
+  location        String?
+  scheduledAt     DateTime
+  durationMinutes Int
+  maxAthletes     Int           @default(10)
+  status          SessionStatus @default(SCHEDULED)
+
+  coach     CoachProfile     @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  exercises Exercise[]
+  bookings  SessionBooking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("sessions")
+}
+
+model Exercise {
+  id              String  @id @default(cuid())
+  sessionId       String
+  name            String
+  sets            Int?
+  reps            Int?
+  durationSeconds Int?
+  restSeconds     Int?
+  notes           String?
+  order           Int     @default(0)
+
+  session  Session           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  progress WorkoutProgress[]
+
+  @@map("exercises")
+}
+
+// ── Bookings & Progress ────────────────────────────────────────────────────────
+
+model SessionBooking {
+  id        String        @id @default(cuid())
+  sessionId String
+  athleteId String
+  status    BookingStatus @default(CONFIRMED)
+  joinedAt  DateTime      @default(now())
+
+  session  Session           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  athlete  AthleteProfile    @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  progress WorkoutProgress[]
+
+  @@unique([sessionId, athleteId])
+  @@map("session_bookings")
+}
+
+model WorkoutProgress {
+  id          String    @id @default(cuid())
+  bookingId   String
+  exerciseId  String
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+
+  booking  SessionBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  exercise Exercise       @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+
+  @@unique([bookingId, exerciseId])
+  @@map("workout_progress")
+}
+
+// ── Social ─────────────────────────────────────────────────────────────────────
+
+model Friendship {
+  id          String           @id @default(cuid())
+  requesterId String
+  addresseeId String
+  status      FriendshipStatus @default(PENDING)
+
+  requester User @relation("Requester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee User @relation("Addressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([requesterId, addresseeId])
+  @@map("friendships")
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?
+  read      Boolean          @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
+}
