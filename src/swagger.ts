@@ -6,7 +6,7 @@ export const swaggerSpec = {
     description:
       "REST API for the Book-a-Train fitness coaching platform. Supports both ATHLETE and COACH roles.",
   },
-  servers: [{ url: "http://localhost:3001", description: "Development server" }],
+  servers: [{ url: process.env["API_URL"] ?? "http://localhost:3001", description: process.env["API_URL"] ? "Production server" : "Development server" }],
   components: {
     securitySchemes: {
       bearerAuth: {

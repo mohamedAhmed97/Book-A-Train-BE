@@ -21,7 +21,11 @@ const app = express();
 const PORT = process.env["PORT"] ?? 3001;
 const origins = (process.env["CORS_ORIGINS"] ?? "http://localhost:3000,http://localhost:3002").split(",");
 
-app.use(cors({ origin: origins, credentials: true }));
+// app.use(cors({ origin: origins, credentials: true }));
+app.use(cors({
+  origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : '*',
+  credentials: true
+}));
 app.use(express.json());
 
 app.use("/api/auth", authRouter);
