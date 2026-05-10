@@ -32,9 +32,20 @@ COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
 COPY --from=builder /app/dist ./dist
 
+# Copy prisma schema + migrations for migrate deploy at startup
+COPY --from=builder /app/prisma ./prisma
+
+# Copy prisma CLI binary for migrate deploy
+COPY --from=builder /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
+
+# Copy entrypoint script
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
+
 # THE MOST IMPORTANT LINE for 1.3GB -> 200MB:
 # Remove Prisma engine binaries that aren't needed for runtime
 RUN rm -rf node_modules/@prisma/engines
 
 EXPOSE 3001
-CMD ["node", "dist/index.js"]
+CMD ["sh", "entrypoint.sh"]
