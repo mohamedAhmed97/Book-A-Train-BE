@@ -156,6 +156,7 @@ sessionsRouter.put("/:id", requireCoach, async (req, res) => {
   const { userId } = req as AuthRequest;
   const schema = z.object({
     title: z.string().optional(),
+    sport: z.string().optional(),
     description: z.string().optional(),
     location: z.string().optional(),
     scheduledAt: z.coerce.date().optional(),
@@ -188,10 +189,27 @@ sessionsRouter.delete("/:id", requireCoach, async (req, res) => {
   const coach = await db.coachProfile.findUnique({ where: { userId } });
   if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
 
-  const session = await db.session.findFirst({ where: { id: req.params["id"], coachId: coach.id } });
+  const session = await db.session.findFirst({
+    where: { id: req.params["id"], coachId: coach.id },
+    include: { bookings: { include: { athlete: { select: { userId: true } } } } },
+  });
   if (!session) { res.status(404).json({ error: "Session not found" }); return; }
 
   const updated = await db.session.update({ where: { id: req.params["id"] }, data: { status: "CANCELLED" } });
+
+  const recipientUserIds = Array.from(new Set(session.bookings.map((b) => b.athlete.userId)));
+  if (recipientUserIds.length > 0) {
+    await db.notification.createMany({
+      data: recipientUserIds.map((notifyUserId) => ({
+        userId: notifyUserId,
+        type: "SESSION_CANCELLED",
+        title: "Session Cancelled",
+        body: `${session.title} has been cancelled`,
+        data: { sessionId: session.id },
+      })),
+    });
+  }
+
   res.json(updated);
 });
 
@@ -209,10 +227,35 @@ sessionsRouter.post("/:id/athletes", requireCoach, async (req, res) => {
   const session = await db.session.findFirst({ where: { id: req.params["id"], coachId: coach.id } });
   if (!session) { res.status(404).json({ error: "Session not found" }); return; }
 
+  const existing = await db.sessionBooking.findMany({
+    where: { sessionId: req.params["id"]!, athleteId: { in: result.data.athleteProfileIds } },
+    select: { athleteId: true },
+  });
+  const existingIds = new Set(existing.map((b) => b.athleteId));
+  const newAthleteIds = result.data.athleteProfileIds.filter((id) => !existingIds.has(id));
+
   await db.sessionBooking.createMany({
     data: result.data.athleteProfileIds.map((athleteId) => ({ sessionId: req.params["id"]!, athleteId })),
     skipDuplicates: true,
   });
+
+  if (newAthleteIds.length > 0) {
+    const newAthletes = await db.athleteProfile.findMany({
+      where: { id: { in: newAthleteIds } },
+      select: { userId: true },
+    });
+    if (newAthletes.length > 0) {
+      await db.notification.createMany({
+        data: newAthletes.map((a) => ({
+          userId: a.userId,
+          type: "SESSION_ASSIGNED",
+          title: "New Session Assigned",
+          body: `You have been added to ${session.title}`,
+          data: { sessionId: session.id },
+        })),
+      });
+    }
+  }
 
   const updated = await db.session.findUnique({
     where: { id: req.params["id"] },

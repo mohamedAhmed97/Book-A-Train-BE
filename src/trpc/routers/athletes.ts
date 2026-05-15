@@ -39,6 +39,11 @@ export const athletesRouter = router({
       });
       if (!athleteUser || athleteUser.role !== "ATHLETE" || !athleteUser.athleteProfile)
         throw new TRPCError({ code: "NOT_FOUND", message: "No athlete found with that email" });
+      const existingRelation = await db.coachAthlete.findUnique({
+        where: { coachId_athleteId: { coachId: coach.id, athleteId: athleteUser.athleteProfile.id } },
+      });
+      if (existingRelation)
+        throw new TRPCError({ code: "CONFLICT", message: "Athlete is already in your roster" });
       return db.coachAthlete.create({
         data: { coachId: coach.id, athleteId: athleteUser.athleteProfile.id },
         include: {

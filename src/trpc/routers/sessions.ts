@@ -129,9 +129,27 @@ export const sessionsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      const session = await db.session.findFirst({ where: { id: input.id, coachId: coach.id } });
+      const session = await db.session.findFirst({
+        where: { id: input.id, coachId: coach.id },
+        include: { bookings: { include: { athlete: { select: { userId: true } } } } },
+      });
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
-      return db.session.update({ where: { id: input.id }, data: { status: "CANCELLED" } });
+      const updated = await db.session.update({ where: { id: input.id }, data: { status: "CANCELLED" } });
+      const recipientUserIds = session.bookings
+        .map((b: { athlete: { userId: string } }) => b.athlete.userId)
+        .filter((uid: string, i: number, arr: string[]) => arr.indexOf(uid) === i);
+      if (recipientUserIds.length > 0) {
+        await db.notification.createMany({
+          data: recipientUserIds.map((userId: string) => ({
+            userId,
+            type: "SESSION_CANCELLED",
+            title: "Session Cancelled",
+            body: `${session.title} has been cancelled`,
+            data: { sessionId: session.id },
+          })),
+        });
+      }
+      return updated;
     }),
 
   assignAthletes: coachProcedure
@@ -141,10 +159,33 @@ export const sessionsRouter = router({
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
       const session = await db.session.findFirst({ where: { id: input.sessionId, coachId: coach.id } });
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+      const existing = await db.sessionBooking.findMany({
+        where: { sessionId: input.sessionId, athleteId: { in: input.athleteProfileIds } },
+        select: { athleteId: true },
+      });
+      const existingIds = new Set(existing.map((b: { athleteId: string }) => b.athleteId));
+      const newAthleteIds = input.athleteProfileIds.filter((id) => !existingIds.has(id));
       await db.sessionBooking.createMany({
         data: input.athleteProfileIds.map((athleteId) => ({ sessionId: input.sessionId, athleteId })),
         skipDuplicates: true,
       });
+      if (newAthleteIds.length > 0) {
+        const newAthletes = await db.athleteProfile.findMany({
+          where: { id: { in: newAthleteIds } },
+          select: { userId: true },
+        });
+        if (newAthletes.length > 0) {
+          await db.notification.createMany({
+            data: newAthletes.map((a: { userId: string }) => ({
+              userId: a.userId,
+              type: "SESSION_ASSIGNED",
+              title: "New Session Assigned",
+              body: `You have been added to ${session.title}`,
+              data: { sessionId: session.id },
+            })),
+          });
+        }
+      }
       return db.session.findUnique({
         where: { id: input.sessionId },
         include: { bookings: true, exercises: { orderBy: { order: "asc" } } },
@@ -156,6 +197,8 @@ export const sessionsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
+      const session = await db.session.findFirst({ where: { id: input.sessionId, coachId: coach.id } });
+      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
       await db.sessionBooking.deleteMany({ where: { sessionId: input.sessionId, athleteId: input.athleteProfileId } });
       return { success: true };
     }),

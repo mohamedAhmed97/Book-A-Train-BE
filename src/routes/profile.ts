@@ -62,7 +62,12 @@ profileRouter.put("/", async (req, res) => {
     where: { id: userId },
     include: { athleteProfile: true, coachProfile: true },
   });
-  res.json(updated);
+  if (!updated) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+  const { passwordHash: _, ...safe } = updated;
+  res.json(safe);
 });
 
 profileRouter.get("/coach-stats", requireCoach, async (req, res) => {
