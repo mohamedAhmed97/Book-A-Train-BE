@@ -59,6 +59,14 @@ athletesRouter.post("/", async (req, res) => {
     return;
   }
 
+  const existingRelation = await db.coachAthlete.findUnique({
+    where: { coachId_athleteId: { coachId: coach.id, athleteId: athleteUser.athleteProfile.id } },
+  });
+  if (existingRelation) {
+    res.status(409).json({ error: "Athlete is already in your roster" });
+    return;
+  }
+
   const relation = await db.coachAthlete.create({
     data: { coachId: coach.id, athleteId: athleteUser.athleteProfile.id },
     include: {

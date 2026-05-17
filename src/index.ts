@@ -1,6 +1,6 @@
 import "dotenv/config";
 import "express-async-errors";
-import express, { type Request, type Response, type NextFunction } from "express";
+import express, { type Request, type Response, type NextFunction, type RequestHandler } from "express";
 import cors from "cors";
 import swaggerUi from "swagger-ui-express";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
@@ -19,12 +19,19 @@ import { swaggerSpec } from "./swagger";
 
 const app = express();
 const PORT = process.env["PORT"] ?? 3001;
-const origins = (process.env["CORS_ORIGINS"] ?? "http://localhost:3000,http://localhost:3002").split(",");
+const origins = (process.env["CORS_ORIGINS"] ?? "http://localhost:3000,http://localhost:3002,http://127.0.0.1:3000,http://127.0.0.1:3002")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
 
-// app.use(cors({ origin: origins, credentials: true }));
 app.use(cors({
-  origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : '*',
-  credentials: true
+  origin: (origin, callback) => {
+    // allow non-browser clients (curl, mobile app native fetch) which send no Origin header
+    if (!origin) return callback(null, true);
+    if (origins.includes(origin)) return callback(null, true);
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  credentials: true,
 }));
 app.use(express.json());
 
@@ -38,7 +45,7 @@ app.use("/api/coaches", coachesRouter);
 app.use("/api/friends", friendsRouter);
 app.use("/api/notifications", notificationsRouter);
 
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.use("/api-docs", swaggerUi.serve as unknown as RequestHandler[], swaggerUi.setup(swaggerSpec) as unknown as RequestHandler);
 
 app.use("/trpc", createExpressMiddleware({ router: appRouter, createContext }));
 

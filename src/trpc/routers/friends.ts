@@ -58,10 +58,22 @@ export const friendsRouter = router({
         where: { id: input.friendshipId, addresseeId: ctx.userId, status: "PENDING" },
       });
       if (!friendship) throw new TRPCError({ code: "NOT_FOUND", message: "Friend request not found" });
-      return db.friendship.update({
+      const updated = await db.friendship.update({
         where: { id: input.friendshipId },
         data: { status: input.accept ? "ACCEPTED" : "DECLINED" },
       });
+      if (input.accept) {
+        await db.notification.create({
+          data: {
+            userId: friendship.requesterId,
+            type: "FRIEND_ACCEPTED",
+            title: "Friend Request Accepted",
+            body: "Your friend request was accepted",
+            data: { friendshipId: friendship.id, byUserId: ctx.userId },
+          },
+        });
+      }
+      return updated;
     }),
 
   send: protectedProcedure
@@ -69,8 +81,28 @@ export const friendsRouter = router({
     .mutation(async ({ ctx, input }) => {
       if (input.addresseeId === ctx.userId)
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot friend yourself" });
-      return db.friendship.create({
+      const existing = await db.friendship.findFirst({
+        where: {
+          OR: [
+            { requesterId: ctx.userId, addresseeId: input.addresseeId },
+            { requesterId: input.addresseeId, addresseeId: ctx.userId },
+          ],
+        },
+      });
+      if (existing)
+        throw new TRPCError({ code: "CONFLICT", message: "Friend request already exists" });
+      const friendship = await db.friendship.create({
         data: { requesterId: ctx.userId, addresseeId: input.addresseeId },
       });
+      await db.notification.create({
+        data: {
+          userId: input.addresseeId,
+          type: "FRIEND_REQUEST",
+          title: "New Friend Request",
+          body: "Someone sent you a friend request",
+          data: { friendshipId: friendship.id, fromUserId: ctx.userId },
+        },
+      });
+      return friendship;
     }),
 });

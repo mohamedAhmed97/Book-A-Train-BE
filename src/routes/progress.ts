@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../lib/db";
-import { authenticate, requireAthlete, type AuthRequest } from "../middleware/auth";
+import { authenticate, requireAthlete, requireCoach, type AuthRequest } from "../middleware/auth";
 
 export const progressRouter = Router();
 progressRouter.use(authenticate);
@@ -64,14 +64,39 @@ progressRouter.get("/stats", requireAthlete, async (req, res) => {
   res.json({ totalSessions, completedExercises, thisWeekSessions });
 });
 
-// GET /api/progress/booking/:bookingId
+// GET /api/progress/booking/:bookingId — booking owner (athlete) or owning coach
 progressRouter.get("/booking/:bookingId", async (req, res) => {
+  const { userId, role } = req as unknown as AuthRequest;
+
+  const booking = await db.sessionBooking.findUnique({
+    where: { id: req.params["bookingId"] },
+    include: {
+      athlete: { select: { userId: true } },
+      session: { select: { coach: { select: { userId: true } } } },
+    },
+  });
+  if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
+
+  const isAthlete = role === "ATHLETE" && booking.athlete.userId === userId;
+  const isCoach = role === "COACH" && booking.session.coach.userId === userId;
+  if (!isAthlete && !isCoach) { res.status(403).json({ error: "Forbidden" }); return; }
+
   const progress = await db.workoutProgress.findMany({ where: { bookingId: req.params["bookingId"] } });
   res.json(progress);
 });
 
 // GET /api/progress/session/:sessionId — coach: all athletes' progress in a session
-progressRouter.get("/session/:sessionId", async (req, res) => {
+progressRouter.get("/session/:sessionId", requireCoach, async (req, res) => {
+  const { userId } = req as AuthRequest;
+
+  const coach = await db.coachProfile.findUnique({ where: { userId } });
+  if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
+
+  const session = await db.session.findFirst({
+    where: { id: req.params["sessionId"], coachId: coach.id },
+  });
+  if (!session) { res.status(404).json({ error: "Session not found" }); return; }
+
   const bookings = await db.sessionBooking.findMany({
     where: { sessionId: req.params["sessionId"] },
     include: {
