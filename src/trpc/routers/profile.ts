@@ -1,13 +1,11 @@
 import { z } from "zod";
 import { db } from "../../lib/db";
+import { athletesRepo, coachesRepo, usersRepo } from "../../repos";
 import { router, protectedProcedure, coachProcedure } from "../init";
 
 export const profileRouter = router({
   get: protectedProcedure.query(async ({ ctx }) => {
-    const user = await db.user.findUnique({
-      where: { id: ctx.userId },
-      include: { athleteProfile: true, coachProfile: true },
-    });
+    const user = await usersRepo.findByIdWithProfiles(db, ctx.userId);
     if (!user) throw new Error("User not found");
     const { passwordHash: _, ...safe } = user;
     return safe;
@@ -24,39 +22,29 @@ export const profileRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const { name, phone, avatar, sport, bio, goals } = input;
-      const user = await db.user.update({
-        where: { id: ctx.userId },
-        data: { ...(name && { name }), ...(phone && { phone }), ...(avatar && { avatar }) },
-      });
+      const user = await usersRepo.updateBasics(db, ctx.userId, { name, phone, avatar });
       if (user.role === "ATHLETE" && (sport || bio || goals)) {
-        await db.athleteProfile.update({
-          where: { userId: ctx.userId },
-          data: { ...(sport && { sport }), ...(bio && { bio }), ...(goals && { goals }) },
-        });
+        await athletesRepo.updateProfile(db, ctx.userId, { sport, bio, goals });
       }
       if (user.role === "COACH" && (sport || bio)) {
-        await db.coachProfile.update({
-          where: { userId: ctx.userId },
-          data: { ...(sport && { sport }), ...(bio && { bio }) },
-        });
+        await coachesRepo.updateProfile(db, ctx.userId, { sport, bio });
       }
-      const updated = await db.user.findUnique({
-        where: { id: ctx.userId },
-        include: { athleteProfile: true, coachProfile: true },
-      });
+      const updated = await usersRepo.findByIdWithProfiles(db, ctx.userId);
       if (!updated) throw new Error("User not found");
       const { passwordHash: _, ...safe } = updated;
       return safe;
     }),
 
   coachStats: coachProcedure.query(async ({ ctx }) => {
-    const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
+    const coach = await coachesRepo.findByUserId(db, ctx.userId);
     if (!coach) throw new Error("Coach profile not found");
-    const [athleteCount, sessionCount, upcomingCount] = await Promise.all([
-      db.coachAthlete.count({ where: { coachId: coach.id } }),
-      db.session.count({ where: { coachId: coach.id } }),
-      db.session.count({ where: { coachId: coach.id, status: "SCHEDULED", scheduledAt: { gte: new Date() } } }),
-    ]);
-    return { athleteCount, sessionCount, upcomingCount, subscriptionTier: coach.subscriptionTier, athleteLimit: coach.athleteLimit };
+    const { athleteCount, sessionCount, upcomingCount } = await coachesRepo.stats(db, coach.id);
+    return {
+      athleteCount,
+      sessionCount,
+      upcomingCount,
+      subscriptionTier: coach.subscriptionTier,
+      athleteLimit: coach.athleteLimit,
+    };
   }),
 });

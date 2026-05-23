@@ -1,6 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../lib/db";
+import {
+  athletesRepo,
+  coachesRepo,
+  progressRepo,
+  sessionBookingsRepo,
+  sessionsRepo,
+} from "../repos";
 import { authenticate, requireAthlete, requireCoach, type AuthRequest } from "../middleware/auth";
 
 export const progressRouter = Router();
@@ -18,48 +25,27 @@ progressRouter.post("/toggle", requireAthlete, async (req, res) => {
   const result = schema.safeParse(req.body);
   if (!result.success) { res.status(400).json({ error: result.error.errors.map((e) => e.message).join(", ") }); return; }
 
-  const athlete = await db.athleteProfile.findUnique({ where: { userId } });
+  const athlete = await athletesRepo.findByUserId(db, userId);
   if (!athlete) { res.status(404).json({ error: "Athlete profile not found" }); return; }
 
-  const booking = await db.sessionBooking.findFirst({ where: { id: result.data.bookingId, athleteId: athlete.id } });
+  const booking = await sessionBookingsRepo.findByIdAndAthlete(db, result.data.bookingId, athlete.id);
   if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
 
-  const progress = await db.workoutProgress.upsert({
-    where: { bookingId_exerciseId: { bookingId: result.data.bookingId, exerciseId: result.data.exerciseId } },
-    create: {
-      bookingId: result.data.bookingId,
-      exerciseId: result.data.exerciseId,
-      completed: result.data.completed,
-      completedAt: result.data.completed ? new Date() : null,
-    },
-    update: {
-      completed: result.data.completed,
-      completedAt: result.data.completed ? new Date() : null,
-    },
-  });
+  const progress = await progressRepo.upsert(db, result.data);
   res.json(progress);
 });
 
 // GET /api/progress/stats — athlete: summary stats
 progressRouter.get("/stats", requireAthlete, async (req, res) => {
   const { userId } = req as AuthRequest;
-
-  const athlete = await db.athleteProfile.findUnique({ where: { userId } });
+  const athlete = await athletesRepo.findByUserId(db, userId);
   if (!athlete) { res.status(404).json({ error: "Athlete profile not found" }); return; }
 
-  const totalSessions = await db.sessionBooking.count({ where: { athleteId: athlete.id, status: "CONFIRMED" } });
-
-  const completedExercises = await db.workoutProgress.count({
-    where: { booking: { athleteId: athlete.id }, completed: true },
-  });
-
-  const weekStart = new Date();
-  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
-  weekStart.setHours(0, 0, 0, 0);
-
-  const thisWeekSessions = await db.sessionBooking.count({
-    where: { athleteId: athlete.id, status: "CONFIRMED", session: { scheduledAt: { gte: weekStart } } },
-  });
+  const [totalSessions, completedExercises, thisWeekSessions] = await Promise.all([
+    sessionBookingsRepo.countConfirmedForAthlete(db, athlete.id),
+    progressRepo.countCompletedForAthlete(db, athlete.id),
+    sessionBookingsRepo.countConfirmedForAthleteThisWeek(db, athlete.id),
+  ]);
 
   res.json({ totalSessions, completedExercises, thisWeekSessions });
 });
@@ -68,41 +54,26 @@ progressRouter.get("/stats", requireAthlete, async (req, res) => {
 progressRouter.get("/booking/:bookingId", async (req, res) => {
   const { userId, role } = req as unknown as AuthRequest;
 
-  const booking = await db.sessionBooking.findUnique({
-    where: { id: req.params["bookingId"] },
-    include: {
-      athlete: { select: { userId: true } },
-      session: { select: { coach: { select: { userId: true } } } },
-    },
-  });
+  const booking = await sessionBookingsRepo.findByIdWithOwners(db, req.params["bookingId"]!);
   if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
 
   const isAthlete = role === "ATHLETE" && booking.athlete.userId === userId;
   const isCoach = role === "COACH" && booking.session.coach.userId === userId;
   if (!isAthlete && !isCoach) { res.status(403).json({ error: "Forbidden" }); return; }
 
-  const progress = await db.workoutProgress.findMany({ where: { bookingId: req.params["bookingId"] } });
+  const progress = await progressRepo.listForBooking(db, req.params["bookingId"]!);
   res.json(progress);
 });
 
 // GET /api/progress/session/:sessionId — coach: all athletes' progress in a session
 progressRouter.get("/session/:sessionId", requireCoach, async (req, res) => {
   const { userId } = req as AuthRequest;
-
-  const coach = await db.coachProfile.findUnique({ where: { userId } });
+  const coach = await coachesRepo.findByUserId(db, userId);
   if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
 
-  const session = await db.session.findFirst({
-    where: { id: req.params["sessionId"], coachId: coach.id },
-  });
+  const session = await sessionsRepo.findByIdAndCoach(db, req.params["sessionId"]!, coach.id);
   if (!session) { res.status(404).json({ error: "Session not found" }); return; }
 
-  const bookings = await db.sessionBooking.findMany({
-    where: { sessionId: req.params["sessionId"] },
-    include: {
-      athlete: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-      progress: true,
-    },
-  });
+  const bookings = await sessionBookingsRepo.listBySession(db, req.params["sessionId"]!);
   res.json(bookings);
 });

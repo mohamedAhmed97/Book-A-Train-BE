@@ -1,6 +1,14 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../lib/db";
+import {
+  athletesRepo,
+  coachesRepo,
+  exercisesRepo,
+  notificationsRepo,
+  sessionsRepo,
+  sessionBookingsRepo,
+} from "../repos";
 import { authenticate, requireCoach, requireAthlete, type AuthRequest } from "../middleware/auth";
 
 export const sessionsRouter = Router();
@@ -11,116 +19,42 @@ sessionsRouter.get("/", async (req, res) => {
   const { userId, role } = req as AuthRequest;
 
   if (role === "COACH") {
-    const coach = await db.coachProfile.findUnique({ where: { userId } });
+    const coach = await coachesRepo.findByUserId(db, userId);
     if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
-
     const status = req.query["status"] as string | undefined;
-    const sessions = await db.session.findMany({
-      where: { coachId: coach.id, ...(status ? { status: status as any } : {}) },
-      include: {
-        exercises: { orderBy: { order: "asc" } },
-        bookings: { include: { athlete: { include: { user: { select: { id: true, name: true, avatar: true } } } } } },
-        _count: { select: { bookings: true } },
-      },
-      orderBy: { scheduledAt: "asc" },
-    });
-    res.json(sessions);
+    res.json(await sessionsRepo.listForCoach(db, coach.id, status as any));
     return;
   }
 
-  const athlete = await db.athleteProfile.findUnique({
-    where: { userId },
-    include: { coachAthletes: { select: { coachId: true } } },
-  });
+  const athlete = await athletesRepo.findByUserIdWithCoaches(db, userId);
   if (!athlete) { res.status(404).json({ error: "Athlete profile not found" }); return; }
 
-  const coachIds = athlete.coachAthletes.map((ca) => ca.coachId);
+  const coachIds = athlete.coachAthletes.map((ca: { coachId: string }) => ca.coachId);
+  const assigned = await sessionBookingsRepo.listSessionIdsForAthlete(db, athlete.id);
+  const assignedSessionIds = assigned.map((b: { sessionId: string }) => b.sessionId);
 
-  // include sessions directly assigned via booking even if not on coach's roster
-  const assignedSessions = await db.sessionBooking.findMany({
-    where: { athleteId: athlete.id },
-    select: { sessionId: true },
-  });
-  const assignedSessionIds = assignedSessions.map((b) => b.sessionId);
-
-  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
-
-  const sessions = await db.session.findMany({
-    where: {
-      status: { in: ["SCHEDULED", "ONGOING"] },
-      scheduledAt: { gte: startOfToday },
-      OR: [
-        { coachId: { in: coachIds } },
-        { id: { in: assignedSessionIds } },
-      ],
-    },
-    include: {
-      exercises: { orderBy: { order: "asc" } },
-      _count: { select: { bookings: true } },
-      coach: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-    },
-    orderBy: { scheduledAt: "asc" },
-  });
-  res.json(sessions);
+  res.json(await sessionsRepo.listForAthleteUpcoming(db, { coachIds, assignedSessionIds }));
 });
 
 // GET /api/sessions/bookings — athlete: booked sessions
 sessionsRouter.get("/bookings", requireAthlete, async (req, res) => {
   const { userId } = req as AuthRequest;
-  const athlete = await db.athleteProfile.findUnique({ where: { userId } });
+  const athlete = await athletesRepo.findByUserId(db, userId);
   if (!athlete) { res.status(404).json({ error: "Athlete profile not found" }); return; }
-
-  const bookings = await db.sessionBooking.findMany({
-    where: { athleteId: athlete.id, status: "CONFIRMED" },
-    include: {
-      session: {
-        include: {
-          exercises: { orderBy: { order: "asc" } },
-          coach: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-        },
-      },
-      progress: true,
-    },
-    orderBy: { session: { scheduledAt: "asc" } },
-  });
-  res.json(bookings);
+  res.json(await sessionBookingsRepo.listForAthlete(db, athlete.id));
 });
 
 // GET /api/sessions/today — athlete: today's session
 sessionsRouter.get("/today", requireAthlete, async (req, res) => {
   const { userId } = req as AuthRequest;
-  const athlete = await db.athleteProfile.findUnique({ where: { userId } });
+  const athlete = await athletesRepo.findByUserId(db, userId);
   if (!athlete) { res.status(404).json({ error: "Athlete profile not found" }); return; }
-
-  const start = new Date(); start.setHours(0, 0, 0, 0);
-  const end = new Date(); end.setHours(23, 59, 59, 999);
-
-  const booking = await db.sessionBooking.findFirst({
-    where: { athleteId: athlete.id, status: "CONFIRMED", session: { scheduledAt: { gte: start, lte: end } } },
-    include: {
-      session: {
-        include: {
-          exercises: { orderBy: { order: "asc" } },
-          coach: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-        },
-      },
-      progress: true,
-    },
-  });
-  res.json(booking);
+  res.json(await sessionBookingsRepo.findTodayForAthlete(db, athlete.id));
 });
 
 // GET /api/sessions/:id
 sessionsRouter.get("/:id", async (req, res) => {
-  const session = await db.session.findUnique({
-    where: { id: req.params["id"] },
-    include: {
-      exercises: { orderBy: { order: "asc" } },
-      bookings: { include: { athlete: { include: { user: { select: { id: true, name: true, avatar: true } } } } } },
-      coach: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-      _count: { select: { bookings: true } },
-    },
-  });
+  const session = await sessionsRepo.findByIdWithDetails(db, req.params["id"]!);
   if (!session) { res.status(404).json({ error: "Session not found" }); return; }
   res.json(session);
 });
@@ -141,13 +75,10 @@ sessionsRouter.post("/", requireCoach, async (req, res) => {
   const result = schema.safeParse(req.body);
   if (!result.success) { res.status(400).json({ error: result.error.errors.map((e) => e.message).join(", ") }); return; }
 
-  const coach = await db.coachProfile.findUnique({ where: { userId } });
+  const coach = await coachesRepo.findByUserId(db, userId);
   if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
 
-  const session = await db.session.create({
-    data: { ...result.data, coachId: coach.id },
-    include: { exercises: { orderBy: { order: "asc" } }, _count: { select: { bookings: true } } },
-  });
+  const session = await sessionsRepo.create(db, { ...result.data, coachId: coach.id });
   res.status(201).json(session);
 });
 
@@ -168,17 +99,13 @@ sessionsRouter.put("/:id", requireCoach, async (req, res) => {
   const result = schema.safeParse(req.body);
   if (!result.success) { res.status(400).json({ error: result.error.errors.map((e) => e.message).join(", ") }); return; }
 
-  const coach = await db.coachProfile.findUnique({ where: { userId } });
+  const coach = await coachesRepo.findByUserId(db, userId);
   if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
 
-  const session = await db.session.findFirst({ where: { id: req.params["id"], coachId: coach.id } });
+  const session = await sessionsRepo.findByIdAndCoach(db, req.params["id"]!, coach.id);
   if (!session) { res.status(404).json({ error: "Session not found" }); return; }
 
-  const updated = await db.session.update({
-    where: { id: req.params["id"] },
-    data: result.data,
-    include: { exercises: { orderBy: { order: "asc" } } },
-  });
+  const updated = await sessionsRepo.update(db, req.params["id"]!, result.data);
   res.json(updated);
 });
 
@@ -186,29 +113,27 @@ sessionsRouter.put("/:id", requireCoach, async (req, res) => {
 sessionsRouter.delete("/:id", requireCoach, async (req, res) => {
   const { userId } = req as AuthRequest;
 
-  const coach = await db.coachProfile.findUnique({ where: { userId } });
+  const coach = await coachesRepo.findByUserId(db, userId);
   if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
 
-  const session = await db.session.findFirst({
-    where: { id: req.params["id"], coachId: coach.id },
-    include: { bookings: { include: { athlete: { select: { userId: true } } } } },
-  });
+  const session = await sessionsRepo.findByIdAndCoachWithBookings(db, req.params["id"]!, coach.id);
   if (!session) { res.status(404).json({ error: "Session not found" }); return; }
 
-  const updated = await db.session.update({ where: { id: req.params["id"] }, data: { status: "CANCELLED" } });
+  const updated = await sessionsRepo.cancel(db, req.params["id"]!);
 
-  const recipientUserIds = Array.from(new Set(session.bookings.map((b) => b.athlete.userId)));
-  if (recipientUserIds.length > 0) {
-    await db.notification.createMany({
-      data: recipientUserIds.map((notifyUserId) => ({
-        userId: notifyUserId,
-        type: "SESSION_CANCELLED",
-        title: "Session Cancelled",
-        body: `${session.title} has been cancelled`,
-        data: { sessionId: session.id },
-      })),
-    });
-  }
+  const recipientUserIds = Array.from(
+    new Set(session.bookings.map((b: { athlete: { userId: string } }) => b.athlete.userId)),
+  );
+  await notificationsRepo.createMany(
+    db,
+    recipientUserIds.map((notifyUserId) => ({
+      userId: notifyUserId,
+      type: "SESSION_CANCELLED" as const,
+      title: "Session Cancelled",
+      body: `${session.title} has been cancelled`,
+      data: { sessionId: session.id },
+    })),
+  );
 
   res.json(updated);
 });
@@ -221,47 +146,33 @@ sessionsRouter.post("/:id/athletes", requireCoach, async (req, res) => {
   const result = schema.safeParse(req.body);
   if (!result.success) { res.status(400).json({ error: "Invalid input" }); return; }
 
-  const coach = await db.coachProfile.findUnique({ where: { userId } });
+  const coach = await coachesRepo.findByUserId(db, userId);
   if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
 
-  const session = await db.session.findFirst({ where: { id: req.params["id"], coachId: coach.id } });
+  const session = await sessionsRepo.findByIdAndCoach(db, req.params["id"]!, coach.id);
   if (!session) { res.status(404).json({ error: "Session not found" }); return; }
 
-  const existing = await db.sessionBooking.findMany({
-    where: { sessionId: req.params["id"]!, athleteId: { in: result.data.athleteProfileIds } },
-    select: { athleteId: true },
-  });
-  const existingIds = new Set(existing.map((b) => b.athleteId));
+  const existing = await sessionBookingsRepo.listExisting(db, req.params["id"]!, result.data.athleteProfileIds);
+  const existingIds = new Set(existing.map((b: { athleteId: string }) => b.athleteId));
   const newAthleteIds = result.data.athleteProfileIds.filter((id) => !existingIds.has(id));
 
-  await db.sessionBooking.createMany({
-    data: result.data.athleteProfileIds.map((athleteId) => ({ sessionId: req.params["id"]!, athleteId })),
-    skipDuplicates: true,
-  });
+  await sessionBookingsRepo.createMany(db, req.params["id"]!, result.data.athleteProfileIds);
 
   if (newAthleteIds.length > 0) {
-    const newAthletes = await db.athleteProfile.findMany({
-      where: { id: { in: newAthleteIds } },
-      select: { userId: true },
-    });
-    if (newAthletes.length > 0) {
-      await db.notification.createMany({
-        data: newAthletes.map((a) => ({
-          userId: a.userId,
-          type: "SESSION_ASSIGNED",
-          title: "New Session Assigned",
-          body: `You have been added to ${session.title}`,
-          data: { sessionId: session.id },
-        })),
-      });
-    }
+    const newAthletes = await athletesRepo.findUserIdsByProfileIds(db, newAthleteIds);
+    await notificationsRepo.createMany(
+      db,
+      newAthletes.map((a: { userId: string }) => ({
+        userId: a.userId,
+        type: "SESSION_ASSIGNED" as const,
+        title: "New Session Assigned",
+        body: `You have been added to ${session.title}`,
+        data: { sessionId: session.id },
+      })),
+    );
   }
 
-  const updated = await db.session.findUnique({
-    where: { id: req.params["id"] },
-    include: { bookings: true, exercises: { orderBy: { order: "asc" } } },
-  });
-  res.json(updated);
+  res.json(await sessionsRepo.findWithBookingsAfter(db, req.params["id"]!));
 });
 
 // POST /api/sessions/:sessionId/exercises — coach: add one exercise
@@ -280,13 +191,13 @@ sessionsRouter.post("/:sessionId/exercises", requireCoach, async (req, res) => {
   const result = schema.safeParse(req.body);
   if (!result.success) { res.status(400).json({ error: result.error.errors.map((e) => e.message).join(", ") }); return; }
 
-  const coach = await db.coachProfile.findUnique({ where: { userId } });
+  const coach = await coachesRepo.findByUserId(db, userId);
   if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
 
-  const session = await db.session.findFirst({ where: { id: req.params["sessionId"], coachId: coach.id } });
+  const session = await sessionsRepo.findByIdAndCoach(db, req.params["sessionId"]!, coach.id);
   if (!session) { res.status(404).json({ error: "Session not found" }); return; }
 
-  const exercise = await db.exercise.create({ data: { sessionId: req.params["sessionId"]!, ...result.data } });
+  const exercise = await exercisesRepo.createOne(db, req.params["sessionId"]!, result.data);
   res.status(201).json(exercise);
 });
 
@@ -307,19 +218,12 @@ sessionsRouter.post("/:sessionId/exercises/bulk", requireCoach, async (req, res)
   const result = schema.safeParse(req.body);
   if (!result.success) { res.status(400).json({ error: result.error.errors.map((e) => e.message).join(", ") }); return; }
 
-  const coach = await db.coachProfile.findUnique({ where: { userId } });
+  const coach = await coachesRepo.findByUserId(db, userId);
   if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
 
-  const session = await db.session.findFirst({ where: { id: req.params["sessionId"], coachId: coach.id } });
+  const session = await sessionsRepo.findByIdAndCoach(db, req.params["sessionId"]!, coach.id);
   if (!session) { res.status(404).json({ error: "Session not found" }); return; }
 
-  await db.exercise.createMany({
-    data: result.data.exercises.map((ex) => ({ sessionId: req.params["sessionId"]!, ...ex })),
-  });
-
-  const exercises = await db.exercise.findMany({
-    where: { sessionId: req.params["sessionId"] },
-    orderBy: { order: "asc" },
-  });
-  res.status(201).json(exercises);
+  await exercisesRepo.createMany(db, req.params["sessionId"]!, result.data.exercises);
+  res.status(201).json(await exercisesRepo.listForSession(db, req.params["sessionId"]!));
 });

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../lib/db";
+import { coachesRepo, exercisesRepo } from "../repos";
 import { authenticate, requireCoach, type AuthRequest } from "../middleware/auth";
 
 export const exercisesRouter = Router();
@@ -16,32 +17,27 @@ const exerciseShape = z.object({
   order: z.number().int().nonnegative().default(0),
 });
 
-// PUT /api/exercises/:id
 exercisesRouter.put("/:id", async (req, res) => {
   const { userId } = req as unknown as AuthRequest;
   const result = exerciseShape.partial().safeParse(req.body);
   if (!result.success) { res.status(400).json({ error: result.error.errors.map((e) => e.message).join(", ") }); return; }
 
-  const coach = await db.coachProfile.findUnique({ where: { userId } });
+  const coach = await coachesRepo.findByUserId(db, userId);
   if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
 
-  const exercise = await db.exercise.findFirst({ where: { id: req.params["id"], session: { coachId: coach.id } } });
+  const exercise = await exercisesRepo.findByIdForCoach(db, req.params["id"]!, coach.id);
   if (!exercise) { res.status(404).json({ error: "Exercise not found" }); return; }
 
-  const updated = await db.exercise.update({ where: { id: req.params["id"] }, data: result.data });
+  const updated = await exercisesRepo.update(db, req.params["id"]!, result.data);
   res.json(updated);
 });
 
-// DELETE /api/exercises/:id
 exercisesRouter.delete("/:id", async (req, res) => {
   const { userId } = req as unknown as AuthRequest;
-
-  const coach = await db.coachProfile.findUnique({ where: { userId } });
+  const coach = await coachesRepo.findByUserId(db, userId);
   if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
-
-  const exercise = await db.exercise.findFirst({ where: { id: req.params["id"], session: { coachId: coach.id } } });
+  const exercise = await exercisesRepo.findByIdForCoach(db, req.params["id"]!, coach.id);
   if (!exercise) { res.status(404).json({ error: "Exercise not found" }); return; }
-
-  await db.exercise.delete({ where: { id: req.params["id"] } });
+  await exercisesRepo.delete(db, req.params["id"]!);
   res.json({ success: true });
 });

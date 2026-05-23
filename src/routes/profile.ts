@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../lib/db";
+import { athletesRepo, coachesRepo, usersRepo } from "../repos";
 import { authenticate, requireCoach, type AuthRequest } from "../middleware/auth";
 
 export const profileRouter = Router();
@@ -8,14 +9,8 @@ profileRouter.use(authenticate);
 
 profileRouter.get("/", async (req, res) => {
   const { userId } = req as AuthRequest;
-  const user = await db.user.findUnique({
-    where: { id: userId },
-    include: { athleteProfile: true, coachProfile: true },
-  });
-  if (!user) {
-    res.status(404).json({ error: "User not found" });
-    return;
-  }
+  const user = await usersRepo.findByIdWithProfiles(db, userId);
+  if (!user) { res.status(404).json({ error: "User not found" }); return; }
   const { passwordHash: _, ...safe } = user;
   res.json(safe);
 });
@@ -39,54 +34,26 @@ profileRouter.put("/", async (req, res) => {
 
   const { name, phone, avatar, sport, bio, goals } = result.data;
 
-  const user = await db.user.update({
-    where: { id: userId },
-    data: { ...(name && { name }), ...(phone && { phone }), ...(avatar && { avatar }) },
-  });
+  const user = await usersRepo.updateBasics(db, userId, { name, phone, avatar });
 
   if (user.role === "ATHLETE" && (sport || bio || goals)) {
-    await db.athleteProfile.update({
-      where: { userId },
-      data: { ...(sport && { sport }), ...(bio && { bio }), ...(goals && { goals }) },
-    });
+    await athletesRepo.updateProfile(db, userId, { sport, bio, goals });
   }
-
   if (user.role === "COACH" && (sport || bio)) {
-    await db.coachProfile.update({
-      where: { userId },
-      data: { ...(sport && { sport }), ...(bio && { bio }) },
-    });
+    await coachesRepo.updateProfile(db, userId, { sport, bio });
   }
 
-  const updated = await db.user.findUnique({
-    where: { id: userId },
-    include: { athleteProfile: true, coachProfile: true },
-  });
-  if (!updated) {
-    res.status(404).json({ error: "User not found" });
-    return;
-  }
+  const updated = await usersRepo.findByIdWithProfiles(db, userId);
+  if (!updated) { res.status(404).json({ error: "User not found" }); return; }
   const { passwordHash: _, ...safe } = updated;
   res.json(safe);
 });
 
 profileRouter.get("/coach-stats", requireCoach, async (req, res) => {
   const { userId } = req as AuthRequest;
-
-  const coach = await db.coachProfile.findUnique({ where: { userId } });
-  if (!coach) {
-    res.status(404).json({ error: "Coach profile not found" });
-    return;
-  }
-
-  const [athleteCount, sessionCount, upcomingCount] = await Promise.all([
-    db.coachAthlete.count({ where: { coachId: coach.id } }),
-    db.session.count({ where: { coachId: coach.id } }),
-    db.session.count({
-      where: { coachId: coach.id, status: "SCHEDULED", scheduledAt: { gte: new Date() } },
-    }),
-  ]);
-
+  const coach = await coachesRepo.findByUserId(db, userId);
+  if (!coach) { res.status(404).json({ error: "Coach profile not found" }); return; }
+  const { athleteCount, sessionCount, upcomingCount } = await coachesRepo.stats(db, coach.id);
   res.json({
     athleteCount,
     sessionCount,

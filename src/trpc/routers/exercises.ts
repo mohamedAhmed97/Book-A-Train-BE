@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { db } from "../../lib/db";
 import { TRPCError } from "@trpc/server";
+import {
+  coachesRepo,
+  exercisesRepo,
+  notificationsRepo,
+  sessionsRepo,
+} from "../../repos";
 import { router, coachProcedure } from "../init";
 
 const exerciseShape = z.object({
@@ -17,35 +23,49 @@ export const exercisesRouter = router({
   addMany: coachProcedure
     .input(z.object({ sessionId: z.string(), exercises: z.array(exerciseShape) }))
     .mutation(async ({ ctx, input }) => {
-      const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
+      const coach = await coachesRepo.findByUserId(db, ctx.userId);
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      const session = await db.session.findFirst({ where: { id: input.sessionId, coachId: coach.id } });
+      const session = await sessionsRepo.findByIdAndCoachWithBookings(db, input.sessionId, coach.id);
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
-      await db.exercise.createMany({
-        data: input.exercises.map((ex) => ({ sessionId: input.sessionId, ...ex })),
-      });
-      return db.exercise.findMany({ where: { sessionId: input.sessionId }, orderBy: { order: "asc" } });
+      await exercisesRepo.createMany(db, input.sessionId, input.exercises);
+      const recipientUserIds = Array.from(
+        new Set(session.bookings.map((b: { athlete: { userId: string } }) => b.athlete.userId)),
+      );
+      if (recipientUserIds.length > 0) {
+        const count = input.exercises.length;
+        await notificationsRepo.createMany(
+          db,
+          recipientUserIds.map((userId) => ({
+            userId,
+            type: "EXERCISE_ASSIGNED" as const,
+            title: "New Exercises Added",
+            body: `${count} new exercise${count > 1 ? "s" : ""} added to ${session.title}`,
+            data: { sessionId: session.id, exerciseCount: count },
+          })),
+        );
+      }
+      return exercisesRepo.listForSession(db, input.sessionId);
     }),
 
   update: coachProcedure
     .input(exerciseShape.partial().extend({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
+      const coach = await coachesRepo.findByUserId(db, ctx.userId);
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      const exercise = await db.exercise.findFirst({ where: { id: input.id, session: { coachId: coach.id } } });
+      const exercise = await exercisesRepo.findByIdForCoach(db, input.id, coach.id);
       if (!exercise) throw new TRPCError({ code: "NOT_FOUND", message: "Exercise not found" });
       const { id, ...data } = input;
-      return db.exercise.update({ where: { id }, data });
+      return exercisesRepo.update(db, id, data);
     }),
 
   delete: coachProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
+      const coach = await coachesRepo.findByUserId(db, ctx.userId);
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      const exercise = await db.exercise.findFirst({ where: { id: input.id, session: { coachId: coach.id } } });
+      const exercise = await exercisesRepo.findByIdForCoach(db, input.id, coach.id);
       if (!exercise) throw new TRPCError({ code: "NOT_FOUND", message: "Exercise not found" });
-      await db.exercise.delete({ where: { id: input.id } });
+      await exercisesRepo.delete(db, input.id);
       return { success: true };
     }),
 });
