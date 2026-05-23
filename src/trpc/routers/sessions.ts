@@ -1,82 +1,44 @@
 import { z } from "zod";
 import { db } from "../../lib/db";
 import { TRPCError } from "@trpc/server";
+import {
+  athletesRepo,
+  coachesRepo,
+  notificationsRepo,
+  sessionsRepo,
+  sessionBookingsRepo,
+} from "../../repos";
 import { router, coachProcedure, athleteProcedure } from "../init";
-import { createNotification, createNotifications } from "../../lib/notifications";
 
 export const sessionsRouter = router({
   today: athleteProcedure.query(async ({ ctx }) => {
-    const athlete = await db.athleteProfile.findUnique({ where: { userId: ctx.userId } });
+    const athlete = await athletesRepo.findByUserId(db, ctx.userId);
     if (!athlete) throw new TRPCError({ code: "NOT_FOUND", message: "Athlete profile not found" });
-    const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(); endOfDay.setHours(23, 59, 59, 999);
-    const booking = await db.sessionBooking.findFirst({
-      where: {
-        athleteId: athlete.id,
-        status: "CONFIRMED",
-        session: { scheduledAt: { gte: startOfDay, lte: endOfDay }, status: { not: "CANCELLED" } },
-      },
-      include: {
-        session: {
-          include: {
-            exercises: { orderBy: { order: "asc" } },
-            coach: { include: { user: { select: { name: true, avatar: true } } } },
-          },
-        },
-        progress: true,
-      },
-    });
+    const booking = await sessionBookingsRepo.findTodayForAthlete(db, athlete.id);
     if (!booking) return null;
     return { id: booking.id, session: booking.session, progress: booking.progress };
   }),
 
   myBookings: athleteProcedure.query(async ({ ctx }) => {
-    const athlete = await db.athleteProfile.findUnique({ where: { userId: ctx.userId } });
+    const athlete = await athletesRepo.findByUserId(db, ctx.userId);
     if (!athlete) throw new TRPCError({ code: "NOT_FOUND", message: "Athlete profile not found" });
-    return db.sessionBooking.findMany({
-      where: { athleteId: athlete.id, status: "CONFIRMED" },
-      include: {
-        session: {
-          include: {
-            exercises: { orderBy: { order: "asc" } },
-            coach: { include: { user: { select: { name: true } } } },
-          },
-        },
-        progress: true,
-      },
-      orderBy: { session: { scheduledAt: "asc" } },
-    });
+    return sessionBookingsRepo.listForAthlete(db, athlete.id);
   }),
 
   mySessions: coachProcedure
     .input(z.object({ status: z.string().optional() }))
     .query(async ({ ctx, input }) => {
-      const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
+      const coach = await coachesRepo.findByUserId(db, ctx.userId);
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      return db.session.findMany({
-        where: { coachId: coach.id, ...(input.status ? { status: input.status as any } : {}) },
-        include: {
-          exercises: { orderBy: { order: "asc" } },
-          bookings: { include: { athlete: { include: { user: { select: { id: true, name: true, avatar: true } } } } } },
-          _count: { select: { bookings: true } },
-        },
-        orderBy: { scheduledAt: "asc" },
-      });
+      return sessionsRepo.listForCoach(db, coach.id, input.status as any);
     }),
 
   get: coachProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
+      const coach = await coachesRepo.findByUserId(db, ctx.userId);
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      const session = await db.session.findFirst({
-        where: { id: input.id, coachId: coach.id },
-        include: {
-          exercises: { orderBy: { order: "asc" } },
-          bookings: { include: { athlete: { include: { user: { select: { id: true, name: true, email: true, avatar: true } } } } } },
-          _count: { select: { bookings: true } },
-        },
-      });
+      const session = await sessionsRepo.findByIdAndCoachWithDetails(db, input.id, coach.id);
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
       return session;
     }),
@@ -92,12 +54,9 @@ export const sessionsRouter = router({
       maxAthletes: z.number().int().min(1).max(100).default(10),
     }))
     .mutation(async ({ ctx, input }) => {
-      const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
+      const coach = await coachesRepo.findByUserId(db, ctx.userId);
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      return db.session.create({
-        data: { ...input, coachId: coach.id },
-        include: { exercises: { orderBy: { order: "asc" } }, _count: { select: { bookings: true } } },
-      });
+      return sessionsRepo.create(db, { ...input, coachId: coach.id });
     }),
 
   update: coachProcedure
@@ -113,33 +72,27 @@ export const sessionsRouter = router({
       status: z.enum(["SCHEDULED", "ONGOING", "COMPLETED", "CANCELLED"]).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
+      const coach = await coachesRepo.findByUserId(db, ctx.userId);
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      const session = await db.session.findFirst({ where: { id: input.id, coachId: coach.id } });
-      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+      const existing = await sessionsRepo.findByIdAndCoach(db, input.id, coach.id);
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
       const { id, ...data } = input;
-      return db.session.update({
-        where: { id },
-        data,
-        include: { exercises: { orderBy: { order: "asc" } }, _count: { select: { bookings: true } } },
-      });
+      return sessionsRepo.update(db, id, data);
     }),
 
   cancel: coachProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
+      const coach = await coachesRepo.findByUserId(db, ctx.userId);
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      const session = await db.session.findFirst({
-        where: { id: input.id, coachId: coach.id },
-        include: { bookings: { include: { athlete: { select: { userId: true } } } } },
-      });
+      const session = await sessionsRepo.findByIdAndCoachWithBookings(db, input.id, coach.id);
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
-      const updated = await db.session.update({ where: { id: input.id }, data: { status: "CANCELLED" } });
+      const updated = await sessionsRepo.cancel(db, input.id);
       const recipientUserIds = Array.from(
         new Set(session.bookings.map((b: { athlete: { userId: string } }) => b.athlete.userId)),
       );
-      await createNotifications(
+      await notificationsRepo.createMany(
+        db,
         recipientUserIds.map((userId) => ({
           userId,
           type: "SESSION_CANCELLED" as const,
@@ -154,26 +107,18 @@ export const sessionsRouter = router({
   assignAthletes: coachProcedure
     .input(z.object({ sessionId: z.string(), athleteProfileIds: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
-      const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
+      const coach = await coachesRepo.findByUserId(db, ctx.userId);
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      const session = await db.session.findFirst({ where: { id: input.sessionId, coachId: coach.id } });
+      const session = await sessionsRepo.findByIdAndCoach(db, input.sessionId, coach.id);
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
-      const existing = await db.sessionBooking.findMany({
-        where: { sessionId: input.sessionId, athleteId: { in: input.athleteProfileIds } },
-        select: { athleteId: true },
-      });
+      const existing = await sessionBookingsRepo.listExisting(db, input.sessionId, input.athleteProfileIds);
       const existingIds = new Set(existing.map((b: { athleteId: string }) => b.athleteId));
       const newAthleteIds = input.athleteProfileIds.filter((id) => !existingIds.has(id));
-      await db.sessionBooking.createMany({
-        data: input.athleteProfileIds.map((athleteId) => ({ sessionId: input.sessionId, athleteId })),
-        skipDuplicates: true,
-      });
+      await sessionBookingsRepo.createMany(db, input.sessionId, input.athleteProfileIds);
       if (newAthleteIds.length > 0) {
-        const newAthletes = await db.athleteProfile.findMany({
-          where: { id: { in: newAthleteIds } },
-          select: { userId: true },
-        });
-        await createNotifications(
+        const newAthletes = await athletesRepo.findUserIdsByProfileIds(db, newAthleteIds);
+        await notificationsRepo.createMany(
+          db,
           newAthletes.map((a: { userId: string }) => ({
             userId: a.userId,
             type: "SESSION_ASSIGNED" as const,
@@ -183,41 +128,29 @@ export const sessionsRouter = router({
           })),
         );
       }
-      return db.session.findUnique({
-        where: { id: input.sessionId },
-        include: { bookings: true, exercises: { orderBy: { order: "asc" } } },
-      });
+      return sessionsRepo.findWithBookingsAfter(db, input.sessionId);
     }),
 
   removeAthlete: coachProcedure
     .input(z.object({ sessionId: z.string(), athleteProfileId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
+      const coach = await coachesRepo.findByUserId(db, ctx.userId);
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      const session = await db.session.findFirst({ where: { id: input.sessionId, coachId: coach.id } });
+      const session = await sessionsRepo.findByIdAndCoach(db, input.sessionId, coach.id);
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
-      await db.sessionBooking.deleteMany({ where: { sessionId: input.sessionId, athleteId: input.athleteProfileId } });
+      await sessionBookingsRepo.removeOne(db, input.sessionId, input.athleteProfileId);
       return { success: true };
     }),
 
   cancelBooking: athleteProcedure
     .input(z.object({ bookingId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const athlete = await db.athleteProfile.findUnique({
-        where: { userId: ctx.userId },
-        include: { user: { select: { name: true } } },
-      });
+      const athlete = await athletesRepo.findByUserIdWithName(db, ctx.userId);
       if (!athlete) throw new TRPCError({ code: "NOT_FOUND", message: "Athlete profile not found" });
-      const booking = await db.sessionBooking.findFirst({
-        where: { id: input.bookingId, athleteId: athlete.id },
-        include: { session: { include: { coach: { select: { userId: true } } } } },
-      });
+      const booking = await sessionBookingsRepo.findByIdAndAthleteWithSession(db, input.bookingId, athlete.id);
       if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
-      const updated = await db.sessionBooking.update({
-        where: { id: input.bookingId },
-        data: { status: "CANCELLED" },
-      });
-      await createNotification({
+      const updated = await sessionBookingsRepo.setStatus(db, input.bookingId, "CANCELLED");
+      await notificationsRepo.createOne(db, {
         userId: booking.session.coach.userId,
         type: "SESSION_DECLINED",
         title: "Athlete Cancelled",
@@ -230,21 +163,12 @@ export const sessionsRouter = router({
   confirmBooking: athleteProcedure
     .input(z.object({ bookingId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const athlete = await db.athleteProfile.findUnique({
-        where: { userId: ctx.userId },
-        include: { user: { select: { name: true } } },
-      });
+      const athlete = await athletesRepo.findByUserIdWithName(db, ctx.userId);
       if (!athlete) throw new TRPCError({ code: "NOT_FOUND", message: "Athlete profile not found" });
-      const booking = await db.sessionBooking.findFirst({
-        where: { id: input.bookingId, athleteId: athlete.id },
-        include: { session: { include: { coach: { select: { userId: true } } } } },
-      });
+      const booking = await sessionBookingsRepo.findByIdAndAthleteWithSession(db, input.bookingId, athlete.id);
       if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
-      const updated = await db.sessionBooking.update({
-        where: { id: input.bookingId },
-        data: { status: "CONFIRMED" },
-      });
-      await createNotification({
+      const updated = await sessionBookingsRepo.setStatus(db, input.bookingId, "CONFIRMED");
+      await notificationsRepo.createOne(db, {
         userId: booking.session.coach.userId,
         type: "SESSION_ACCEPTED",
         title: "Athlete Accepted",

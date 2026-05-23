@@ -1,71 +1,31 @@
 import { z } from "zod";
 import { db } from "../../lib/db";
 import { TRPCError } from "@trpc/server";
+import { friendsRepo, notificationsRepo, usersRepo } from "../../repos";
 import { router, protectedProcedure } from "../init";
-import { createNotification } from "../../lib/notifications";
 
 export const friendsRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {
-    return db.friendship.findMany({
-      where: {
-        status: "ACCEPTED",
-        OR: [{ requesterId: ctx.userId }, { addresseeId: ctx.userId }],
-      },
-      include: {
-        requester: { select: { id: true, name: true, role: true, avatar: true } },
-        addressee: { select: { id: true, name: true, role: true, avatar: true } },
-      },
-    });
+    return friendsRepo.listAccepted(db, ctx.userId);
   }),
 
   pending: protectedProcedure.query(async ({ ctx }) => {
-    return db.friendship.findMany({
-      where: { addresseeId: ctx.userId, status: "PENDING" },
-      include: {
-        requester: { select: { id: true, name: true, role: true, avatar: true } },
-      },
-    });
+    return friendsRepo.listPendingFor(db, ctx.userId);
   }),
 
   feed: protectedProcedure.query(async ({ ctx }) => {
-    const friendships = await db.friendship.findMany({
-      where: { status: "ACCEPTED", OR: [{ requesterId: ctx.userId }, { addresseeId: ctx.userId }] },
-      select: { requesterId: true, addresseeId: true },
-    });
-    const friendIds = friendships.map((f: { requesterId: string; addresseeId: string }) =>
-      f.requesterId === ctx.userId ? f.addresseeId : f.requesterId
-    );
-    if (friendIds.length === 0) return [];
-    return db.workoutProgress.findMany({
-      where: { completed: true, booking: { athlete: { userId: { in: friendIds } } } },
-      include: {
-        booking: {
-          include: {
-            athlete: { include: { user: { select: { name: true } } } },
-            session: { select: { sport: true, title: true } },
-          },
-        },
-        exercise: { select: { name: true } },
-      },
-      orderBy: { completedAt: "desc" },
-      take: 20,
-    });
+    return friendsRepo.feedFor(db, ctx.userId);
   }),
 
   respond: protectedProcedure
     .input(z.object({ friendshipId: z.string(), accept: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      const friendship = await db.friendship.findFirst({
-        where: { id: input.friendshipId, addresseeId: ctx.userId, status: "PENDING" },
-      });
+      const friendship = await friendsRepo.findPendingByIdForAddressee(db, input.friendshipId, ctx.userId);
       if (!friendship) throw new TRPCError({ code: "NOT_FOUND", message: "Friend request not found" });
-      const updated = await db.friendship.update({
-        where: { id: input.friendshipId },
-        data: { status: input.accept ? "ACCEPTED" : "DECLINED" },
-      });
+      const updated = await friendsRepo.setStatus(db, input.friendshipId, input.accept ? "ACCEPTED" : "DECLINED");
       if (input.accept) {
-        const me = await db.user.findUnique({ where: { id: ctx.userId }, select: { name: true } });
-        await createNotification({
+        const me = await usersRepo.findNameById(db, ctx.userId);
+        await notificationsRepo.createOne(db, {
           userId: friendship.requesterId,
           type: "FRIEND_ACCEPTED",
           title: "Friend Request Accepted",
@@ -81,21 +41,12 @@ export const friendsRouter = router({
     .mutation(async ({ ctx, input }) => {
       if (input.addresseeId === ctx.userId)
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot friend yourself" });
-      const existing = await db.friendship.findFirst({
-        where: {
-          OR: [
-            { requesterId: ctx.userId, addresseeId: input.addresseeId },
-            { requesterId: input.addresseeId, addresseeId: ctx.userId },
-          ],
-        },
-      });
+      const existing = await friendsRepo.findBetween(db, ctx.userId, input.addresseeId);
       if (existing)
         throw new TRPCError({ code: "CONFLICT", message: "Friend request already exists" });
-      const friendship = await db.friendship.create({
-        data: { requesterId: ctx.userId, addresseeId: input.addresseeId },
-      });
-      const me = await db.user.findUnique({ where: { id: ctx.userId }, select: { name: true } });
-      await createNotification({
+      const friendship = await friendsRepo.create(db, ctx.userId, input.addresseeId);
+      const me = await usersRepo.findNameById(db, ctx.userId);
+      await notificationsRepo.createOne(db, {
         userId: input.addresseeId,
         type: "FRIEND_REQUEST",
         title: "New Friend Request",

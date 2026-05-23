@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { db } from "../lib/db";
+import { usersRepo } from "../repos";
 import { authenticate, type AuthRequest } from "../middleware/auth";
 
 const JWT_SECRET = process.env["JWT_SECRET"] ?? "dev-secret-change-in-production";
@@ -26,25 +27,14 @@ authRouter.post("/register", async (req, res) => {
 
   const { name, email, password, role, sport } = result.data;
 
-  const existing = await db.user.findUnique({ where: { email } });
+  const existing = await usersRepo.findByEmail(db, email);
   if (existing) {
     res.status(409).json({ error: "Email already in use" });
     return;
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
-
-  const user = await db.user.create({
-    data: {
-      name,
-      email,
-      passwordHash,
-      role,
-      ...(role === "ATHLETE"
-        ? { athleteProfile: { create: { sport } } }
-        : { coachProfile: { create: { sport, athleteLimit: 5 } } }),
-    },
-  });
+  const user = await usersRepo.create(db, { name, email, passwordHash, role, sport });
 
   const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: "7d" });
   res.status(201).json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role, avatar: user.avatar } });
@@ -60,7 +50,7 @@ authRouter.post("/login", async (req, res) => {
 
   const { email, password } = result.data;
 
-  const user = await db.user.findUnique({ where: { email } });
+  const user = await usersRepo.findByEmail(db, email);
   if (!user) {
     res.status(401).json({ error: "Invalid credentials" });
     return;
@@ -78,10 +68,7 @@ authRouter.post("/login", async (req, res) => {
 
 authRouter.get("/me", authenticate, async (req, res) => {
   const { userId } = req as AuthRequest;
-  const user = await db.user.findUnique({
-    where: { id: userId },
-    include: { athleteProfile: true, coachProfile: true },
-  });
+  const user = await usersRepo.findByIdWithProfiles(db, userId);
   if (!user) {
     res.status(404).json({ error: "User not found" });
     return;
