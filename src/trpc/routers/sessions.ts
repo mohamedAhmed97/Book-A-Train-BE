@@ -2,6 +2,7 @@ import { z } from "zod";
 import { db } from "../../lib/db";
 import { TRPCError } from "@trpc/server";
 import { router, coachProcedure, athleteProcedure } from "../init";
+import { createNotification, createNotifications } from "../../lib/notifications";
 
 export const sessionsRouter = router({
   today: athleteProcedure.query(async ({ ctx }) => {
@@ -135,20 +136,18 @@ export const sessionsRouter = router({
       });
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
       const updated = await db.session.update({ where: { id: input.id }, data: { status: "CANCELLED" } });
-      const recipientUserIds = session.bookings
-        .map((b: { athlete: { userId: string } }) => b.athlete.userId)
-        .filter((uid: string, i: number, arr: string[]) => arr.indexOf(uid) === i);
-      if (recipientUserIds.length > 0) {
-        await db.notification.createMany({
-          data: recipientUserIds.map((userId: string) => ({
-            userId,
-            type: "SESSION_CANCELLED",
-            title: "Session Cancelled",
-            body: `${session.title} has been cancelled`,
-            data: { sessionId: session.id },
-          })),
-        });
-      }
+      const recipientUserIds = Array.from(
+        new Set(session.bookings.map((b: { athlete: { userId: string } }) => b.athlete.userId)),
+      );
+      await createNotifications(
+        recipientUserIds.map((userId) => ({
+          userId,
+          type: "SESSION_CANCELLED" as const,
+          title: "Session Cancelled",
+          body: `${session.title} has been cancelled`,
+          data: { sessionId: session.id },
+        })),
+      );
       return updated;
     }),
 
@@ -174,17 +173,15 @@ export const sessionsRouter = router({
           where: { id: { in: newAthleteIds } },
           select: { userId: true },
         });
-        if (newAthletes.length > 0) {
-          await db.notification.createMany({
-            data: newAthletes.map((a: { userId: string }) => ({
-              userId: a.userId,
-              type: "SESSION_ASSIGNED",
-              title: "New Session Assigned",
-              body: `You have been added to ${session.title}`,
-              data: { sessionId: session.id },
-            })),
-          });
-        }
+        await createNotifications(
+          newAthletes.map((a: { userId: string }) => ({
+            userId: a.userId,
+            type: "SESSION_ASSIGNED" as const,
+            title: "New Session Assigned",
+            body: `You have been added to ${session.title}`,
+            data: { sessionId: session.id },
+          })),
+        );
       }
       return db.session.findUnique({
         where: { id: input.sessionId },
@@ -201,5 +198,59 @@ export const sessionsRouter = router({
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
       await db.sessionBooking.deleteMany({ where: { sessionId: input.sessionId, athleteId: input.athleteProfileId } });
       return { success: true };
+    }),
+
+  cancelBooking: athleteProcedure
+    .input(z.object({ bookingId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const athlete = await db.athleteProfile.findUnique({
+        where: { userId: ctx.userId },
+        include: { user: { select: { name: true } } },
+      });
+      if (!athlete) throw new TRPCError({ code: "NOT_FOUND", message: "Athlete profile not found" });
+      const booking = await db.sessionBooking.findFirst({
+        where: { id: input.bookingId, athleteId: athlete.id },
+        include: { session: { include: { coach: { select: { userId: true } } } } },
+      });
+      if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
+      const updated = await db.sessionBooking.update({
+        where: { id: input.bookingId },
+        data: { status: "CANCELLED" },
+      });
+      await createNotification({
+        userId: booking.session.coach.userId,
+        type: "SESSION_DECLINED",
+        title: "Athlete Cancelled",
+        body: `${athlete.user.name} cancelled their booking for ${booking.session.title}`,
+        data: { sessionId: booking.sessionId, bookingId: booking.id, athleteId: athlete.id },
+      });
+      return updated;
+    }),
+
+  confirmBooking: athleteProcedure
+    .input(z.object({ bookingId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const athlete = await db.athleteProfile.findUnique({
+        where: { userId: ctx.userId },
+        include: { user: { select: { name: true } } },
+      });
+      if (!athlete) throw new TRPCError({ code: "NOT_FOUND", message: "Athlete profile not found" });
+      const booking = await db.sessionBooking.findFirst({
+        where: { id: input.bookingId, athleteId: athlete.id },
+        include: { session: { include: { coach: { select: { userId: true } } } } },
+      });
+      if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
+      const updated = await db.sessionBooking.update({
+        where: { id: input.bookingId },
+        data: { status: "CONFIRMED" },
+      });
+      await createNotification({
+        userId: booking.session.coach.userId,
+        type: "SESSION_ACCEPTED",
+        title: "Athlete Accepted",
+        body: `${athlete.user.name} accepted ${booking.session.title}`,
+        data: { sessionId: booking.sessionId, bookingId: booking.id, athleteId: athlete.id },
+      });
+      return updated;
     }),
 });

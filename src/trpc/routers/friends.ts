@@ -2,6 +2,7 @@ import { z } from "zod";
 import { db } from "../../lib/db";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../init";
+import { createNotification } from "../../lib/notifications";
 
 export const friendsRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -63,14 +64,13 @@ export const friendsRouter = router({
         data: { status: input.accept ? "ACCEPTED" : "DECLINED" },
       });
       if (input.accept) {
-        await db.notification.create({
-          data: {
-            userId: friendship.requesterId,
-            type: "FRIEND_ACCEPTED",
-            title: "Friend Request Accepted",
-            body: "Your friend request was accepted",
-            data: { friendshipId: friendship.id, byUserId: ctx.userId },
-          },
+        const me = await db.user.findUnique({ where: { id: ctx.userId }, select: { name: true } });
+        await createNotification({
+          userId: friendship.requesterId,
+          type: "FRIEND_ACCEPTED",
+          title: "Friend Request Accepted",
+          body: `${me?.name ?? "Someone"} accepted your friend request`,
+          data: { friendshipId: friendship.id, byUserId: ctx.userId },
         });
       }
       return updated;
@@ -94,14 +94,13 @@ export const friendsRouter = router({
       const friendship = await db.friendship.create({
         data: { requesterId: ctx.userId, addresseeId: input.addresseeId },
       });
-      await db.notification.create({
-        data: {
-          userId: input.addresseeId,
-          type: "FRIEND_REQUEST",
-          title: "New Friend Request",
-          body: "Someone sent you a friend request",
-          data: { friendshipId: friendship.id, fromUserId: ctx.userId },
-        },
+      const me = await db.user.findUnique({ where: { id: ctx.userId }, select: { name: true } });
+      await createNotification({
+        userId: input.addresseeId,
+        type: "FRIEND_REQUEST",
+        title: "New Friend Request",
+        body: `${me?.name ?? "Someone"} sent you a friend request`,
+        data: { friendshipId: friendship.id, fromUserId: ctx.userId },
       });
       return friendship;
     }),

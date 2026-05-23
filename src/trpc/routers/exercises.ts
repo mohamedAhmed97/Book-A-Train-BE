@@ -2,6 +2,7 @@ import { z } from "zod";
 import { db } from "../../lib/db";
 import { TRPCError } from "@trpc/server";
 import { router, coachProcedure } from "../init";
+import { createNotifications } from "../../lib/notifications";
 
 const exerciseShape = z.object({
   name: z.string().min(1),
@@ -19,11 +20,29 @@ export const exercisesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const coach = await db.coachProfile.findUnique({ where: { userId: ctx.userId } });
       if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
-      const session = await db.session.findFirst({ where: { id: input.sessionId, coachId: coach.id } });
+      const session = await db.session.findFirst({
+        where: { id: input.sessionId, coachId: coach.id },
+        include: { bookings: { include: { athlete: { select: { userId: true } } } } },
+      });
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
       await db.exercise.createMany({
         data: input.exercises.map((ex) => ({ sessionId: input.sessionId, ...ex })),
       });
+      const recipientUserIds = Array.from(
+        new Set(session.bookings.map((b: { athlete: { userId: string } }) => b.athlete.userId)),
+      );
+      if (recipientUserIds.length > 0) {
+        const count = input.exercises.length;
+        await createNotifications(
+          recipientUserIds.map((userId) => ({
+            userId,
+            type: "EXERCISE_ASSIGNED" as const,
+            title: "New Exercises Added",
+            body: `${count} new exercise${count > 1 ? "s" : ""} added to ${session.title}`,
+            data: { sessionId: session.id, exerciseCount: count },
+          })),
+        );
+      }
       return db.exercise.findMany({ where: { sessionId: input.sessionId }, orderBy: { order: "asc" } });
     }),
 
