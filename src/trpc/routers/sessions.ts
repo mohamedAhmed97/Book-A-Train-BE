@@ -4,10 +4,10 @@ import { TRPCError } from "@trpc/server";
 import {
   athletesRepo,
   coachesRepo,
-  notificationsRepo,
   sessionsRepo,
   sessionBookingsRepo,
 } from "../../repos";
+import { dispatchNotification, dispatchNotifications } from "../../services/notifications.service";
 import { router, coachProcedure, athleteProcedure } from "../init";
 
 export const sessionsRouter = router({
@@ -91,8 +91,7 @@ export const sessionsRouter = router({
       const recipientUserIds = Array.from(
         new Set(session.bookings.map((b: { athlete: { userId: string } }) => b.athlete.userId)),
       );
-      await notificationsRepo.createMany(
-        db,
+      await dispatchNotifications(
         recipientUserIds.map((userId) => ({
           userId,
           type: "SESSION_CANCELLED" as const,
@@ -117,8 +116,7 @@ export const sessionsRouter = router({
       await sessionBookingsRepo.createMany(db, input.sessionId, input.athleteProfileIds);
       if (newAthleteIds.length > 0) {
         const newAthletes = await athletesRepo.findUserIdsByProfileIds(db, newAthleteIds);
-        await notificationsRepo.createMany(
-          db,
+        await dispatchNotifications(
           newAthletes.map((a: { userId: string }) => ({
             userId: a.userId,
             type: "SESSION_ASSIGNED" as const,
@@ -150,7 +148,7 @@ export const sessionsRouter = router({
       const booking = await sessionBookingsRepo.findByIdAndAthleteWithSession(db, input.bookingId, athlete.id);
       if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
       const updated = await sessionBookingsRepo.setStatus(db, input.bookingId, "CANCELLED");
-      await notificationsRepo.createOne(db, {
+      await dispatchNotification({
         userId: booking.session.coach.userId,
         type: "SESSION_DECLINED",
         title: "Athlete Cancelled",
@@ -168,7 +166,7 @@ export const sessionsRouter = router({
       const booking = await sessionBookingsRepo.findByIdAndAthleteWithSession(db, input.bookingId, athlete.id);
       if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
       const updated = await sessionBookingsRepo.setStatus(db, input.bookingId, "CONFIRMED");
-      await notificationsRepo.createOne(db, {
+      await dispatchNotification({
         userId: booking.session.coach.userId,
         type: "SESSION_ACCEPTED",
         title: "Athlete Accepted",

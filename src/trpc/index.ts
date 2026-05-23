@@ -8,6 +8,7 @@ import { notificationsRouter } from "./routers/notifications";
 import { progressRouter } from "./routers/progress";
 import { coachesRouter } from "./routers/coaches";
 import { friendsRouter } from "./routers/friends";
+import { pushTokensRouter } from "./routers/pushTokens";
 
 export const appRouter = router({
   auth: authRouter,
@@ -19,6 +20,7 @@ export const appRouter = router({
   progress: progressRouter,
   coaches: coachesRouter,
   friends: friendsRouter,
+  pushTokens: pushTokensRouter,
 });
 
 export type AppRouter = typeof appRouter;

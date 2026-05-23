@@ -4,9 +4,9 @@ import { TRPCError } from "@trpc/server";
 import {
   coachesRepo,
   exercisesRepo,
-  notificationsRepo,
   sessionsRepo,
 } from "../../repos";
+import { dispatchNotifications } from "../../services/notifications.service";
 import { router, coachProcedure } from "../init";
 
 const exerciseShape = z.object({
@@ -33,8 +33,7 @@ export const exercisesRouter = router({
       );
       if (recipientUserIds.length > 0) {
         const count = input.exercises.length;
-        await notificationsRepo.createMany(
-          db,
+        await dispatchNotifications(
           recipientUserIds.map((userId) => ({
             userId,
             type: "EXERCISE_ASSIGNED" as const,

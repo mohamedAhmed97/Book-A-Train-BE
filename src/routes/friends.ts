@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../lib/db";
-import { friendsRepo, notificationsRepo, usersRepo } from "../repos";
+import { friendsRepo, usersRepo } from "../repos";
+import { dispatchNotification } from "../services/notifications.service";
 import { authenticate, type AuthRequest } from "../middleware/auth";
 
 export const friendsRouter = Router();
@@ -24,7 +25,7 @@ friendsRouter.post("/request", async (req, res) => {
 
   const friendship = await friendsRepo.create(db, userId, result.data.addresseeId);
   const me = await usersRepo.findNameById(db, userId);
-  await notificationsRepo.createOne(db, {
+  await dispatchNotification({
     userId: result.data.addresseeId,
     type: "FRIEND_REQUEST",
     title: "New Friend Request",
@@ -49,7 +50,7 @@ friendsRouter.patch("/:id/respond", async (req, res) => {
 
   if (result.data.accept) {
     const me = await usersRepo.findNameById(db, userId);
-    await notificationsRepo.createOne(db, {
+    await dispatchNotification({
       userId: friendship.requesterId,
       type: "FRIEND_ACCEPTED",
       title: "Friend Request Accepted",

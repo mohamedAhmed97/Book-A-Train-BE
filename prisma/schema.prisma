@@ -67,6 +67,7 @@ model User {
   sentRequests     Friendship[]    @relation("Requester")
   receivedRequests Friendship[]    @relation("Addressee")
   notifications    Notification[]
+  pushTokens       PushToken[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -221,4 +222,19 @@ model Notification {
   createdAt DateTime @default(now())
 
   @@map("notifications")
+}
+
+model PushToken {
+  id       String @id @default(cuid())
+  userId   String
+  token    String @unique
+  platform String? // "ios" | "android" | "web"
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("push_tokens")
 }

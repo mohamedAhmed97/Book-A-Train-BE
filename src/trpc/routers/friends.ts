@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { db } from "../../lib/db";
 import { TRPCError } from "@trpc/server";
-import { friendsRepo, notificationsRepo, usersRepo } from "../../repos";
+import { friendsRepo, usersRepo } from "../../repos";
+import { dispatchNotification } from "../../services/notifications.service";
 import { router, protectedProcedure } from "../init";
 
 export const friendsRouter = router({
@@ -25,7 +26,7 @@ export const friendsRouter = router({
       const updated = await friendsRepo.setStatus(db, input.friendshipId, input.accept ? "ACCEPTED" : "DECLINED");
       if (input.accept) {
         const me = await usersRepo.findNameById(db, ctx.userId);
-        await notificationsRepo.createOne(db, {
+        await dispatchNotification({
           userId: friendship.requesterId,
           type: "FRIEND_ACCEPTED",
           title: "Friend Request Accepted",
@@ -46,7 +47,7 @@ export const friendsRouter = router({
         throw new TRPCError({ code: "CONFLICT", message: "Friend request already exists" });
       const friendship = await friendsRepo.create(db, ctx.userId, input.addresseeId);
       const me = await usersRepo.findNameById(db, ctx.userId);
-      await notificationsRepo.createOne(db, {
+      await dispatchNotification({
         userId: input.addresseeId,
         type: "FRIEND_REQUEST",
         title: "New Friend Request",

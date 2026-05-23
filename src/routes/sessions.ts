@@ -5,10 +5,10 @@ import {
   athletesRepo,
   coachesRepo,
   exercisesRepo,
-  notificationsRepo,
   sessionsRepo,
   sessionBookingsRepo,
 } from "../repos";
+import { dispatchNotifications } from "../services/notifications.service";
 import { authenticate, requireCoach, requireAthlete, type AuthRequest } from "../middleware/auth";
 
 export const sessionsRouter = Router();
@@ -124,8 +124,7 @@ sessionsRouter.delete("/:id", requireCoach, async (req, res) => {
   const recipientUserIds = Array.from(
     new Set(session.bookings.map((b: { athlete: { userId: string } }) => b.athlete.userId)),
   );
-  await notificationsRepo.createMany(
-    db,
+  await dispatchNotifications(
     recipientUserIds.map((notifyUserId) => ({
       userId: notifyUserId,
       type: "SESSION_CANCELLED" as const,
@@ -160,8 +159,7 @@ sessionsRouter.post("/:id/athletes", requireCoach, async (req, res) => {
 
   if (newAthleteIds.length > 0) {
     const newAthletes = await athletesRepo.findUserIdsByProfileIds(db, newAthleteIds);
-    await notificationsRepo.createMany(
-      db,
+    await dispatchNotifications(
       newAthletes.map((a: { userId: string }) => ({
         userId: a.userId,
         type: "SESSION_ASSIGNED" as const,
