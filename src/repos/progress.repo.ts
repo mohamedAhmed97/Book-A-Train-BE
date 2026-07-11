@@ -29,4 +29,29 @@ export const progressRepo = {
       where: { booking: { athleteId }, completed: true },
     });
   },
+
+  saveResult(
+    db: DBClient,
+    data: {
+      bookingId: string;
+      durationMs: number;
+      distanceM?: number;
+      avgSpeedKph?: number;
+      avgPaceSecPerKm?: number;
+      calories?: number;
+      laps?: number;
+      notes?: string;
+      rawMetrics?: Record<string, string | number | boolean | null>;
+    },
+  ) {
+    return db.workoutResult.upsert({
+      where: { bookingId: data.bookingId },
+      create: data,
+      update: data,
+    });
+  },
+
+  getResult(db: DBClient, bookingId: string) {
+    return db.workoutResult.findUnique({ where: { bookingId } });
+  },
 };
