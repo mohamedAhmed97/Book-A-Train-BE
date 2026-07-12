@@ -43,9 +43,10 @@ COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
-# THE MOST IMPORTANT LINE for 1.3GB -> 200MB:
-# Remove Prisma engine binaries that aren't needed for runtime
-RUN rm -rf node_modules/@prisma/engines
+# Remove only the query engine from @prisma/engines — runtime uses the copy in .prisma instead.
+# Keep the schema engine binary so `prisma migrate deploy` works at startup.
+RUN find node_modules/@prisma/engines -name "libquery_engine*" -delete && \
+    find node_modules/@prisma/engines -name "prisma-fmt*" -delete
 
 EXPOSE 3001
 CMD ["sh", "entrypoint.sh"]
