@@ -167,9 +167,10 @@ model SessionBooking {
   status    BookingStatus @default(CONFIRMED)
   joinedAt  DateTime      @default(now())
 
-  session  Session           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  athlete  AthleteProfile    @relation(fields: [athleteId], references: [id], onDelete: Cascade)
-  progress WorkoutProgress[]
+  session       Session           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  athlete       AthleteProfile    @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  progress      WorkoutProgress[]
+  workoutResult WorkoutResult?
 
   @@unique([sessionId, athleteId])
   @@map("session_bookings")
@@ -187,6 +188,24 @@ model WorkoutProgress {
 
   @@unique([bookingId, exerciseId])
   @@map("workout_progress")
+}
+
+model WorkoutResult {
+  id              String   @id @default(cuid())
+  bookingId       String   @unique
+  durationMs      Int
+  distanceM       Float?
+  avgSpeedKph     Float?
+  avgPaceSecPerKm Float?
+  calories        Int?
+  laps            Int?
+  notes           String?
+  rawMetrics      Json?
+  completedAt     DateTime @default(now())
+
+  booking SessionBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("workout_results")
 }
 
 // ── Social ─────────────────────────────────────────────────────────────────────
