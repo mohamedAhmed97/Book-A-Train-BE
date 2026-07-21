@@ -36,4 +36,30 @@ export const athletesRouter = router({
       await coachAthletesRepo.remove(db, coach.id, input.athleteProfileId);
       return { success: true };
     }),
+
+  getProfile: coachProcedure
+    .input(z.object({ athleteProfileId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const coach = await coachesRepo.findByUserId(db, ctx.userId);
+      if (!coach) throw new TRPCError({ code: "NOT_FOUND", message: "Coach profile not found" });
+      const relation = await coachAthletesRepo.findRelation(db, coach.id, input.athleteProfileId);
+      if (!relation) throw new TRPCError({ code: "FORBIDDEN", message: "Athlete not in your roster" });
+      const athlete = await db.athleteProfile.findUnique({
+        where: { id: input.athleteProfileId },
+        include: {
+          user: { select: { id: true, name: true, email: true, avatar: true } },
+          bookings: {
+            where: { session: { coachId: coach.id } },
+            include: {
+              session: { include: { exercises: { orderBy: { order: "asc" } } } },
+              progress: true,
+              workoutResult: true,
+            },
+            orderBy: { session: { scheduledAt: "desc" } },
+          },
+        },
+      });
+      if (!athlete) throw new TRPCError({ code: "NOT_FOUND", message: "Athlete not found" });
+      return athlete;
+    }),
 });

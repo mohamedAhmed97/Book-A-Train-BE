@@ -97,9 +97,10 @@ model CoachProfile {
   subscriptionTier SubscriptionTier @default(FREE)
   athleteLimit     Int              @default(5)
 
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  coachAthletes CoachAthlete[]
-  sessions      Session[]
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coachAthletes     CoachAthlete[]
+  sessions          Session[]
+  workoutTemplates  WorkoutTemplate[]
 
   @@map("coach_profiles")
 }
@@ -115,6 +116,26 @@ model CoachAthlete {
 
   @@unique([coachId, athleteId])
   @@map("coach_athletes")
+}
+
+// ── Workout Templates ──────────────────────────────────────────────────────────
+
+model WorkoutTemplate {
+  id              String  @id @default(cuid())
+  coachId         String
+  name            String
+  sport           String?
+  sets            Int?
+  reps            Int?
+  durationSeconds Int?
+  restSeconds     Int?
+  notes           String?
+
+  coach CoachProfile @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@map("workout_templates")
 }
 
 // ── Sessions & Exercises ───────────────────────────────────────────────────────

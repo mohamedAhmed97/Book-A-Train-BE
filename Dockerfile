@@ -16,6 +16,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npx prisma generate
 RUN npx tsc
+RUN npx tsc -p prisma/tsconfig.seed.json
 
 # Stage 4: Runner (The "Size Saver" Stage)
 FROM node:20-alpine AS runner
