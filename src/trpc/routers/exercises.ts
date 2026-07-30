@@ -9,6 +9,8 @@ import {
 } from "../../repos";
 import { router, coachProcedure } from "../init";
 
+const WOD_TYPES = ["AMRAP", "FOR_TIME", "EMOM", "TABATA", "MIX"] as const;
+
 const exerciseShape = z.object({
   name: z.string().min(1),
   sets: z.number().int().positive().optional(),
@@ -17,6 +19,7 @@ const exerciseShape = z.object({
   restSeconds: z.number().int().nonnegative().optional(),
   notes: z.string().optional(),
   order: z.number().int().nonnegative().default(0),
+  wodType: z.enum(WOD_TYPES).nullable().optional(),
 });
 
 export const exercisesRouter = router({

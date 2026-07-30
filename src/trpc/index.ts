@@ -9,6 +9,9 @@ import { progressRouter } from "./routers/progress";
 import { coachesRouter } from "./routers/coaches";
 import { friendsRouter } from "./routers/friends";
 import { workoutTemplatesRouter } from "./routers/workoutTemplates";
+import { testsRouter } from "./routers/tests";
+import { customTestsRouter } from "./routers/customTests";
+import { integrationsRouter } from "./routers/integrations";
 
 export const appRouter = router({
   auth: authRouter,
@@ -21,6 +24,9 @@ export const appRouter = router({
   coaches: coachesRouter,
   friends: friendsRouter,
   workoutTemplates: workoutTemplatesRouter,
+  tests: testsRouter,
+  customTests: customTestsRouter,
+  integrations: integrationsRouter,
 });
 
 export type AppRouter = typeof appRouter;

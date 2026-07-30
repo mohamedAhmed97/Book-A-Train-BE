@@ -22,6 +22,7 @@ profileRouter.put("/", async (req, res) => {
     phone: z.string().optional(),
     avatar: z.string().url().optional(),
     sport: z.string().optional(),
+    sports: z.array(z.string()).optional(),
     bio: z.string().max(300).optional(),
     goals: z.string().max(300).optional(),
   });
@@ -32,15 +33,15 @@ profileRouter.put("/", async (req, res) => {
     return;
   }
 
-  const { name, phone, avatar, sport, bio, goals } = result.data;
+  const { name, phone, avatar, sport, sports, bio, goals } = result.data;
 
   const user = await usersRepo.updateBasics(db, userId, { name, phone, avatar });
 
   if (user.role === "ATHLETE" && (sport || bio || goals)) {
     await athletesRepo.updateProfile(db, userId, { sport, bio, goals });
   }
-  if (user.role === "COACH" && (sport || bio)) {
-    await coachesRepo.updateProfile(db, userId, { sport, bio });
+  if (user.role === "COACH" && (sports !== undefined || bio !== undefined)) {
+    await coachesRepo.updateProfile(db, userId, { sports, bio });
   }
 
   const updated = await usersRepo.findByIdWithProfiles(db, userId);

@@ -5,11 +5,11 @@ export const coachesRepo = {
     return db.coachProfile.findUnique({ where: { userId } });
   },
 
-  updateProfile(db: DBClient, userId: string, args: { sport?: string; bio?: string }) {
+  updateProfile(db: DBClient, userId: string, args: { sports?: string[]; bio?: string }) {
     return db.coachProfile.update({
       where: { userId },
       data: {
-        ...(args.sport !== undefined && { sport: args.sport }),
+        ...(args.sports !== undefined && { sports: args.sports }),
         ...(args.bio !== undefined && { bio: args.bio }),
       },
     });

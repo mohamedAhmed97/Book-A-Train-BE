@@ -8,6 +8,7 @@ type ExerciseInput = {
   restSeconds?: number;
   notes?: string;
   order?: number;
+  wodType?: string | null;
 };
 
 export const exercisesRepo = {
@@ -34,6 +35,7 @@ export const exercisesRepo = {
         restSeconds: input.restSeconds,
         notes: input.notes,
         order: input.order ?? 0,
+        wodType: input.wodType || null,
       },
     });
   },
@@ -49,6 +51,7 @@ export const exercisesRepo = {
         restSeconds: ex.restSeconds,
         notes: ex.notes,
         order: ex.order ?? 0,
+        wodType: ex.wodType || null,
       })),
     });
   },

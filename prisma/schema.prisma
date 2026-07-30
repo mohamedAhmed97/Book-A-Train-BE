@@ -49,6 +49,13 @@ enum NotificationType {
   FRIEND_ACCEPTED
   WORKOUT_COMPLETED
   COACH_MESSAGE
+  TEST_ASSIGNED
+  TEST_RESULT_ADDED
+}
+
+enum TestStatus {
+  PENDING
+  COMPLETED
 }
 
 // ── User & Profiles ────────────────────────────────────────────────────────────
@@ -81,9 +88,12 @@ model AthleteProfile {
   bio    String?
   goals  String?
 
-  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  coachAthletes CoachAthlete[]
-  bookings      SessionBooking[]
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coachAthletes         CoachAthlete[]
+  bookings              SessionBooking[]
+  athleteTests          AthleteTest[]
+  customTestAssignments CustomTestAssignment[]
+  stravaIntegration     StravaIntegration?
 
   @@map("athlete_profiles")
 }
@@ -91,7 +101,7 @@ model AthleteProfile {
 model CoachProfile {
   id               String           @id @default(cuid())
   userId           String           @unique
-  sport            String?
+  sports           String[]
   bio              String?
   specialization   String?
   subscriptionTier SubscriptionTier @default(FREE)
@@ -101,6 +111,10 @@ model CoachProfile {
   coachAthletes     CoachAthlete[]
   sessions          Session[]
   workoutTemplates  WorkoutTemplate[]
+  tests             Test[]
+  athleteTests      AthleteTest[]
+  customTests       CustomTest[]
+  customTestAssignments CustomTestAssignment[]
 
   @@map("coach_profiles")
 }
@@ -172,6 +186,7 @@ model Exercise {
   restSeconds     Int?
   notes           String?
   order           Int     @default(0)
+  wodType         String? // AMRAP | FOR_TIME | EMOM | TABATA | MIX — null means no WOD timer
 
   session  Session           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   progress WorkoutProgress[]
@@ -212,17 +227,18 @@ model WorkoutProgress {
 }
 
 model WorkoutResult {
-  id              String   @id @default(cuid())
-  bookingId       String   @unique
-  durationMs      Int
-  distanceM       Float?
-  avgSpeedKph     Float?
-  avgPaceSecPerKm Float?
-  calories        Int?
-  laps            Int?
-  notes           String?
-  rawMetrics      Json?
-  completedAt     DateTime @default(now())
+  id               String   @id @default(cuid())
+  bookingId        String   @unique
+  durationMs       Int
+  distanceM        Float?
+  avgSpeedKph      Float?
+  avgPaceSecPerKm  Float?
+  calories         Int?
+  laps             Int?
+  notes            String?
+  rawMetrics       Json?
+  stravaActivityId String?
+  completedAt      DateTime @default(now())
 
   booking SessionBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
@@ -261,4 +277,161 @@ model Notification {
   createdAt DateTime @default(now())
 
   @@map("notifications")
+}
+
+// ── Fitness Tests ──────────────────────────────────────────────────────────────
+
+model Test {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  sport       String?
+  unit        String
+  isGlobal    Boolean @default(false)
+  coachId     String?
+
+  coach        CoachProfile? @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  athleteTests AthleteTest[]
+
+  createdAt DateTime @default(now())
+
+  @@map("tests")
+}
+
+model AthleteTest {
+  id          String     @id @default(cuid())
+  testId      String
+  athleteId   String
+  coachId     String
+  scheduledAt DateTime?
+  notes       String?
+  status      TestStatus @default(PENDING)
+
+  test    Test           @relation(fields: [testId], references: [id], onDelete: Cascade)
+  athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  coach   CoachProfile   @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  result  TestResult?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("athlete_tests")
+}
+
+model TestResult {
+  id            String   @id @default(cuid())
+  athleteTestId String   @unique
+  value         Float
+  unit          String
+  notes         String?
+  completedAt   DateTime @default(now())
+
+  athleteTest AthleteTest @relation(fields: [athleteTestId], references: [id], onDelete: Cascade)
+
+  @@map("test_results")
+}
+
+// ── Custom (multi-movement) Tests ──────────────────────────────────────────────
+
+model CustomTest {
+  id          String  @id @default(cuid())
+  coachId     String
+  name        String
+  description String?
+  sport       String?
+  unit        String
+
+  coach       CoachProfile           @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  movements   CustomTestMovement[]
+  assignments CustomTestAssignment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("custom_tests")
+}
+
+model CustomTestMovement {
+  id              String  @id @default(cuid())
+  customTestId    String
+  name            String
+  sets            Int?
+  reps            Int?
+  distanceMeters  Float?
+  durationSeconds Int?
+  notes           String?
+  order           Int     @default(0)
+
+  customTest      CustomTest                 @relation(fields: [customTestId], references: [id], onDelete: Cascade)
+  movementResults CustomTestMovementResult[]
+
+  @@map("custom_test_movements")
+}
+
+model CustomTestAssignment {
+  id           String     @id @default(cuid())
+  customTestId String
+  athleteId    String
+  coachId      String
+  scheduledAt  DateTime?
+  notes        String?
+  status       TestStatus @default(PENDING)
+
+  customTest      CustomTest                 @relation(fields: [customTestId], references: [id], onDelete: Cascade)
+  athlete         AthleteProfile             @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  coach           CoachProfile               @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  result          CustomTestResult?
+  movementResults CustomTestMovementResult[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("custom_test_assignments")
+}
+
+model CustomTestResult {
+  id           String   @id @default(cuid())
+  assignmentId String   @unique
+  value        Float
+  unit         String
+  notes        String?
+  completedAt  DateTime @default(now())
+
+  assignment CustomTestAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@map("custom_test_results")
+}
+
+// ── Integrations ───────────────────────────────────────────────────────────────
+
+model StravaIntegration {
+  id              String   @id @default(cuid())
+  athleteId       String   @unique
+  stravaAthleteId String
+  accessToken     String
+  refreshToken    String
+  expiresAt       DateTime
+  scope           String   @default("")
+
+  athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("strava_integrations")
+}
+
+model CustomTestMovementResult {
+  id           String   @id @default(cuid())
+  assignmentId String
+  movementId   String
+  value        Float
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  assignment CustomTestAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  movement   CustomTestMovement   @relation(fields: [movementId], references: [id], onDelete: Cascade)
+
+  @@unique([assignmentId, movementId])
+  @@map("custom_test_movement_results")
 }

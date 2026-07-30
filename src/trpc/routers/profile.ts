@@ -17,17 +17,18 @@ export const profileRouter = router({
       phone: z.string().optional(),
       avatar: z.string().url().optional(),
       sport: z.string().optional(),
+      sports: z.array(z.string()).optional(),
       bio: z.string().max(300).optional(),
       goals: z.string().max(300).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const { name, phone, avatar, sport, bio, goals } = input;
+      const { name, phone, avatar, sport, sports, bio, goals } = input;
       const user = await usersRepo.updateBasics(db, ctx.userId, { name, phone, avatar });
       if (user.role === "ATHLETE" && (sport || bio || goals)) {
         await athletesRepo.updateProfile(db, ctx.userId, { sport, bio, goals });
       }
-      if (user.role === "COACH" && (sport || bio)) {
-        await coachesRepo.updateProfile(db, ctx.userId, { sport, bio });
+      if (user.role === "COACH" && (sports !== undefined || bio !== undefined)) {
+        await coachesRepo.updateProfile(db, ctx.userId, { sports, bio });
       }
       const updated = await usersRepo.findByIdWithProfiles(db, ctx.userId);
       if (!updated) throw new Error("User not found");

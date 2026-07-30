@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { db } from "../../lib/db";
 import { TRPCError } from "@trpc/server";
-import { athletesRepo, notificationsRepo, progressRepo, sessionBookingsRepo } from "../../repos";
+import { athletesRepo, notificationsRepo, progressRepo, sessionBookingsRepo, integrationsRepo } from "../../repos";
 import { router, athleteProcedure } from "../init";
+import * as strava from "../../services/strava";
 
 export const progressRouter = router({
   stats: athleteProcedure.query(async ({ ctx }) => {
@@ -57,6 +58,17 @@ export const progressRouter = router({
         data: { bookingId: booking.id, sessionId: booking.sessionId },
       });
 
+      syncToStrava(athlete.id, {
+        bookingId: input.bookingId,
+        sessionTitle: booking.session.title,
+        sport: booking.session.sport,
+        startDate: new Date(result.completedAt.getTime() - input.durationMs),
+        durationMs: input.durationMs,
+        distanceM: input.distanceM,
+        calories: input.calories,
+        notes: input.notes,
+      }).catch((e) => console.error("[Strava sync]", e));
+
       return result;
     }),
 
@@ -70,3 +82,42 @@ export const progressRouter = router({
       return progressRepo.getResult(db, input.bookingId);
     }),
 });
+
+async function syncToStrava(
+  athleteId: string,
+  data: {
+    bookingId: string;
+    sessionTitle: string;
+    sport: string;
+    startDate: Date;
+    durationMs: number;
+    distanceM?: number;
+    calories?: number;
+    notes?: string;
+  },
+) {
+  const integration = await integrationsRepo.findStravaByAthleteId(db, athleteId);
+  if (!integration) return;
+
+  let accessToken = integration.accessToken;
+  if (integration.expiresAt <= new Date()) {
+    const refreshed = await strava.refreshTokens(integration.refreshToken);
+    await integrationsRepo.updateStravaTokens(db, athleteId, refreshed);
+    accessToken = refreshed.accessToken;
+  }
+
+  const activityId = await strava.createActivity(accessToken, {
+    name: data.sessionTitle,
+    sport: data.sport,
+    startDate: data.startDate,
+    elapsedSec: data.durationMs / 1000,
+    distanceM: data.distanceM,
+    description: data.notes,
+    calories: data.calories,
+  });
+
+  await db.workoutResult.update({
+    where: { bookingId: data.bookingId },
+    data: { stravaActivityId: activityId },
+  });
+}

@@ -46,7 +46,7 @@ export const usersRepo = {
         role: args.role,
         ...(args.role === "ATHLETE"
           ? { athleteProfile: { create: { sport: args.sport } } }
-          : { coachProfile: { create: { sport: args.sport, athleteLimit: 5 } } }),
+          : { coachProfile: { create: { sports: args.sport ? [args.sport] : [], athleteLimit: 5 } } }),
       },
     });
   },

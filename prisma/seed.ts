@@ -182,7 +182,7 @@ async function main() {
   let totalCreated = 0;
 
   for (const coach of coaches) {
-    const sportKey = matchSport(coach.sport);
+    const sportKey = matchSport(coach.sports[0]);
     const templates = SPORT_WORKOUTS[sportKey] ?? [];
 
     // Fetch names already in the library for this coach + sport
@@ -209,6 +209,86 @@ async function main() {
   console.log(`\n✅  Done. Total templates created: ${totalCreated}`);
 }
 
+// ── Global fitness tests ───────────────────────────────────────────────────────
+
+type TestDef = {
+  name: string;
+  description?: string;
+  sport?: string;
+  unit: string;
+};
+
+const GLOBAL_TESTS: TestDef[] = [
+  // Cycling
+  { name: "FTP Test",                sport: "Cycling",    unit: "watts",         description: "20-minute maximal effort test. FTP = 95% of average power output." },
+  { name: "Ramp Test",               sport: "Cycling",    unit: "watts",         description: "Incremental ramp to exhaustion. FTP ≈ 75% of peak 1-minute power." },
+  { name: "10-Minute Power Test",    sport: "Cycling",    unit: "watts",         description: "Maximum average power sustained for 10 minutes." },
+
+  // Running
+  { name: "Cooper 12-Minute Run",    sport: "Running",    unit: "meters",        description: "Run as far as possible in 12 minutes. VO₂max ≈ (distance − 504.9) / 44.73." },
+  { name: "1-Mile Time Trial",       sport: "Running",    unit: "seconds",       description: "Run 1 mile at maximum effort." },
+  { name: "5K Time Trial",           sport: "Running",    unit: "seconds",       description: "Race-effort 5 km run." },
+  { name: "Beep Test (MSFT)",        sport: "Running",    unit: "level",         description: "Multi-stage fitness test (20 m shuttle). Record the highest level reached." },
+  { name: "Yo-Yo Endurance Test",    sport: "Running",    unit: "level",         description: "Yo-Yo intermittent endurance test. Record the highest level reached." },
+
+  // Swimming
+  { name: "CSS Test (400/200)",      sport: "Swimming",   unit: "sec/100m",      description: "Critical Swim Speed = (400m time − 200m time) / 2. Lower is faster." },
+  { name: "T20 Swim Test",           sport: "Swimming",   unit: "meters",        description: "Total distance covered in 20 minutes of continuous swimming." },
+  { name: "400m Time Trial",         sport: "Swimming",   unit: "seconds",       description: "Maximum effort 400 m swim." },
+
+  // Strength — 1RM
+  { name: "1RM Back Squat",          sport: "CrossFit",   unit: "kg",            description: "One-rep maximum back squat." },
+  { name: "1RM Deadlift",            sport: "CrossFit",   unit: "kg",            description: "One-rep maximum conventional deadlift." },
+  { name: "1RM Bench Press",         sport: "CrossFit",   unit: "kg",            description: "One-rep maximum flat bench press." },
+  { name: "1RM Overhead Press",      sport: "CrossFit",   unit: "kg",            description: "One-rep maximum strict overhead press." },
+  { name: "1RM Clean & Jerk",        sport: "CrossFit",   unit: "kg",            description: "One-rep maximum clean & jerk." },
+  { name: "1RM Snatch",              sport: "CrossFit",   unit: "kg",            description: "One-rep maximum snatch." },
+
+  // CrossFit Benchmarks
+  { name: "Fran",                    sport: "CrossFit",   unit: "seconds",       description: "21-15-9 Thrusters (43/30 kg) + Pull-Ups, for time." },
+  { name: "Grace",                   sport: "CrossFit",   unit: "seconds",       description: "30 Clean & Jerks (60/43 kg), for time." },
+  { name: "Isabel",                  sport: "CrossFit",   unit: "seconds",       description: "30 Snatches (60/43 kg), for time." },
+  { name: "Cindy",                   sport: "CrossFit",   unit: "rounds",        description: "20-minute AMRAP: 5 Pull-Ups, 10 Push-Ups, 15 Air Squats." },
+  { name: "Murph",                   sport: "CrossFit",   unit: "seconds",       description: "1 mi Run, 100 Pull-Ups, 200 Push-Ups, 300 Squats, 1 mi Run — for time." },
+  { name: "DT",                      sport: "CrossFit",   unit: "seconds",       description: "5 rounds: 12 Deadlifts, 9 Hang Power Cleans, 6 Push Jerks (70/47 kg)." },
+
+  // Football / Soccer
+  { name: "40-Yard Dash",            sport: "Football",   unit: "seconds",       description: "Sprint 40 yards (36.6 m) from a standing start." },
+  { name: "Illinois Agility Test",   sport: "Football",   unit: "seconds",       description: "Agility course measuring change-of-direction speed. Lower is better." },
+  { name: "Yo-Yo IR1 Test",          sport: "Football",   unit: "level",         description: "Yo-Yo Intermittent Recovery Test Level 1. Record the highest level reached." },
+
+  // Basketball
+  { name: "Lane Agility Drill",      sport: "Basketball", unit: "seconds",       description: "NBA Draft Combine agility test around the paint. Lower is better." },
+  { name: "3/4-Court Sprint",        sport: "Basketball", unit: "seconds",       description: "Full-effort sprint from baseline to 3/4 court line." },
+  { name: "Max Vertical Jump",       sport: "Basketball", unit: "cm",            description: "Highest point reached above standing reach — box jump or Vertec." },
+
+  // General / Multi-sport
+  { name: "Max Push-Ups",            unit: "reps",        description: "Maximum push-ups completed with correct form without stopping." },
+  { name: "Max Pull-Ups",            unit: "reps",        description: "Maximum strict pull-ups completed without kipping or stopping." },
+  { name: "Plank Hold",              unit: "seconds",     description: "Maximum time in a forearm plank position with correct posture." },
+  { name: "Sit-and-Reach",           unit: "cm",          description: "Seated hamstring/lower-back flexibility. Record distance past feet." },
+];
+
+async function seedGlobalTests() {
+  console.log("\n🧪  Seeding global fitness tests…");
+
+  const existing = await db.test.findMany({ where: { isGlobal: true }, select: { name: true } });
+  const existingNames = new Set(existing.map((t) => t.name));
+
+  const toCreate = GLOBAL_TESTS.filter((t) => !existingNames.has(t.name));
+  if (toCreate.length === 0) {
+    console.log("   Already seeded — skipping.");
+    return;
+  }
+
+  await db.test.createMany({
+    data: toCreate.map((t) => ({ ...t, isGlobal: true })),
+  });
+
+  console.log(`   Created ${toCreate.length} global tests.`);
+}
+
 main()
+  .then(() => seedGlobalTests())
   .catch((e) => { console.error(e); process.exit(1); })
   .finally(() => db.$disconnect());
