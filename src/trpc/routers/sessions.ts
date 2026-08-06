@@ -14,9 +14,8 @@ export const sessionsRouter = router({
   today: athleteProcedure.query(async ({ ctx }) => {
     const athlete = await athletesRepo.findByUserId(db, ctx.userId);
     if (!athlete) throw new TRPCError({ code: "NOT_FOUND", message: "Athlete profile not found" });
-    const booking = await sessionBookingsRepo.findTodayForAthlete(db, athlete.id);
-    if (!booking) return null;
-    return { id: booking.id, session: booking.session, progress: booking.progress };
+    const bookings = await sessionBookingsRepo.findTodayForAthlete(db, athlete.id);
+    return bookings.map((b) => ({ id: b.id, session: b.session, progress: b.progress }));
   }),
 
   myBookings: athleteProcedure.query(async ({ ctx }) => {

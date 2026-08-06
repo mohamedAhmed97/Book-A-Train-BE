@@ -156,7 +156,7 @@ export const sessionBookingsRepo = {
     start.setHours(0, 0, 0, 0);
     const end = new Date();
     end.setHours(23, 59, 59, 999);
-    return db.sessionBooking.findFirst({
+    return db.sessionBooking.findMany({
       where: {
         athleteId,
         status: "CONFIRMED",
@@ -171,6 +171,7 @@ export const sessionBookingsRepo = {
         },
         progress: true,
       },
+      orderBy: { session: { scheduledAt: "asc" } },
     });
   },
 
