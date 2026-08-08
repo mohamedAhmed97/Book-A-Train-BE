@@ -12,6 +12,7 @@ import { workoutTemplatesRouter } from "./routers/workoutTemplates";
 import { testsRouter } from "./routers/tests";
 import { customTestsRouter } from "./routers/customTests";
 import { integrationsRouter } from "./routers/integrations";
+import { vitalsRouter } from "./routers/vitals";
 
 export const appRouter = router({
   auth: authRouter,
@@ -27,6 +28,7 @@ export const appRouter = router({
   tests: testsRouter,
   customTests: customTestsRouter,
   integrations: integrationsRouter,
+  vitals: vitalsRouter,
 });
 
 export type AppRouter = typeof appRouter;

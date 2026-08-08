@@ -9,4 +9,10 @@ export { progressRepo } from "./progress.repo";
 export { testsRepo } from "./tests.repo";
 export { customTestsRepo } from "./customTests.repo";
 export { integrationsRepo } from "./integrations.repo";
+export { vitalsRepo } from "./vitals.repo";
+export type {
+  VitalsSampleInput,
+  MetricAggregateInput,
+  DailyMetricInput,
+} from "./vitals.repo";
 export type { DBClient } from "./types";

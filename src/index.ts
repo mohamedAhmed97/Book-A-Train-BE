@@ -14,6 +14,7 @@ import { coachesRouter } from "./routes/coaches";
 import { friendsRouter } from "./routes/friends";
 import { notificationsRouter } from "./routes/notifications";
 import { stravaRouter } from "./routes/strava";
+import { vitalsStreamRouter } from "./routes/vitals";
 import { appRouter } from "./trpc";
 import { createContext } from "./trpc/context";
 import { swaggerSpec } from "./swagger";
@@ -46,6 +47,7 @@ app.use("/api/coaches", coachesRouter);
 app.use("/api/friends", friendsRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/strava", stravaRouter);
+app.use("/api/vitals", vitalsStreamRouter);
 
 app.use("/api-docs", swaggerUi.serve as unknown as RequestHandler[], swaggerUi.setup(swaggerSpec) as unknown as RequestHandler);
 

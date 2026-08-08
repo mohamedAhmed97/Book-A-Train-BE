@@ -58,6 +58,24 @@ enum TestStatus {
   COMPLETED
 }
 
+// Where a vitals sample came from. HEALTH_CONNECT is the Android system
+// aggregator (Samsung Health, Fitbit, Garmin and Wear OS all write into it);
+// HEALTH_KIT is its iOS counterpart, fed by the vendor iOS apps of watches
+// that pair with iPhone (Fitbit, Garmin, Polar, Amazfit — not Wear OS, which
+// can't pair with iPhone at all); WEAR_OS is reserved for a future companion
+// app streaming sensors directly off the watch; BLE is a direct sensor link.
+enum VitalsProvider {
+  HEALTH_CONNECT
+  HEALTH_KIT
+  WEAR_OS
+  /// Sensor paired directly over Bluetooth LE (Heart Rate Service 0x180D) —
+  /// chest straps and sports watches in broadcast mode. Brand-agnostic and
+  /// genuinely live, unlike the platform aggregators above which deliver on
+  /// the vendor app's own sync schedule.
+  BLE
+  MANUAL
+}
+
 // ── User & Profiles ────────────────────────────────────────────────────────────
 
 model User {
@@ -82,11 +100,14 @@ model User {
 }
 
 model AthleteProfile {
-  id    String  @id @default(cuid())
-  userId String @unique
+  id     String  @id @default(cuid())
+  userId String  @unique
   sport  String?
   bio    String?
   goals  String?
+  weightKg   Float?
+  // Used to derive HR training zones. Falls back to DEFAULT_MAX_HR when unset.
+  maxHeartRate Int?
 
   user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   coachAthletes         CoachAthlete[]
@@ -94,6 +115,9 @@ model AthleteProfile {
   athleteTests          AthleteTest[]
   customTestAssignments CustomTestAssignment[]
   stravaIntegration     StravaIntegration?
+  watchIntegration      WatchIntegration?
+  vitalsSamples         VitalsSample[]
+  dailyVitals           DailyVitalsMetric[]
 
   @@map("athlete_profiles")
 }
@@ -207,6 +231,9 @@ model SessionBooking {
   athlete       AthleteProfile    @relation(fields: [athleteId], references: [id], onDelete: Cascade)
   progress      WorkoutProgress[]
   workoutResult WorkoutResult?
+  vitalsSamples  VitalsSample[]
+  vitalsSummary  SessionVitalsSummary?
+  metricSummaries SessionMetricSummary[]
 
   @@unique([sessionId, athleteId])
   @@map("session_bookings")
@@ -403,6 +430,143 @@ model CustomTestResult {
 }
 
 // ── Integrations ───────────────────────────────────────────────────────────────
+
+/// One row per athlete who has linked a watch. The phone app owns the actual
+/// device pairing — this only records that the athlete granted us read access
+/// and which record types came back granted.
+model WatchIntegration {
+  id           String         @id @default(cuid())
+  athleteId    String         @unique
+  provider     VitalsProvider @default(HEALTH_CONNECT)
+  deviceName   String?
+  deviceModel  String?
+  /// Health Connect record types the athlete actually approved, e.g. ["HeartRate","Spo2"].
+  grantedTypes String[]
+  enabled      Boolean        @default(true)
+  lastSyncAt   DateTime?
+
+  athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("watch_integrations")
+}
+
+/// Raw time-series point read off the watch. `bookingId` is set when the sample
+/// falls inside a tracked session, null for ambient/daily readings.
+///
+/// `metric` is an open string, not an enum, so any record type the athlete's
+/// watch exposes can be stored without a migration. Keys we know how to present
+/// are described in services/metricCatalog.ts; unknown keys are still stored and
+/// still reach the coach, they just render generically.
+model VitalsSample {
+  id         String         @id @default(cuid())
+  athleteId  String
+  bookingId  String?
+  metric     String
+  value      Float
+  unit       String
+  recordedAt DateTime
+  source     VitalsProvider @default(HEALTH_CONNECT)
+  deviceName String?
+
+  athlete AthleteProfile  @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  booking SessionBooking? @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  // Watch samples carry exact timestamps, so (athlete, metric, instant) is a
+  // natural idempotency key — a retried batch upload can't duplicate rows.
+  @@unique([athleteId, metric, recordedAt])
+  @@index([bookingId, metric, recordedAt])
+  @@index([athleteId, metric, recordedAt])
+  @@map("vitals_samples")
+}
+
+/// Rolled-up vitals for one completed session. Recomputed on ingest so the
+/// coach dashboard never has to aggregate thousands of samples on read.
+model SessionVitalsSummary {
+  id        String @id @default(cuid())
+  bookingId String @unique
+
+  avgHeartRate Int?
+  maxHeartRate Int?
+  minHeartRate Int?
+
+  // Seconds spent in each HR zone (1 = recovery … 5 = max).
+  zone1Sec Int @default(0)
+  zone2Sec Int @default(0)
+  zone3Sec Int @default(0)
+  zone4Sec Int @default(0)
+  zone5Sec Int @default(0)
+
+  avgHrvMs           Float?
+  avgSpo2            Float?
+  minSpo2            Float?
+  avgRespiratoryRate Float?
+  avgSkinTempC       Float?
+  totalCalories      Int?
+  totalSteps         Int?
+  totalDistanceM     Float?
+
+  sampleCount Int      @default(0)
+  computedAt  DateTime @default(now())
+
+  booking SessionBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("session_vitals_summaries")
+}
+
+/// Per-session rollup of one metric, for every metric the session captured.
+///
+/// Sits alongside SessionVitalsSummary rather than replacing it: HR zones are
+/// heart-rate-specific logic that doesn't generalise, whereas this table is
+/// uniform and open, so a metric nobody anticipated still reaches the coach with
+/// a usable summary. All five aggregates are stored so the reader can pick the
+/// one that suits the metric without going back to the raw samples.
+model SessionMetricSummary {
+  id        String @id @default(cuid())
+  bookingId String
+  metric    String
+  unit      String
+
+  min   Float
+  max   Float
+  avg   Float
+  sum   Float
+  /// Most recent value in the session — the meaningful one for body metrics.
+  last  Float
+  count Int
+
+  computedAt DateTime @default(now())
+
+  booking SessionBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@unique([bookingId, metric])
+  @@index([bookingId])
+  @@map("session_metric_summaries")
+}
+
+/// Daily recovery/readiness value for one metric, independent of any session.
+/// Open per-metric rows for the same reason as VitalsSample.metric.
+model DailyVitalsMetric {
+  id        String   @id @default(cuid())
+  athleteId String
+  date      DateTime @db.Date
+  metric    String
+  value     Float
+  unit      String
+
+  athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([athleteId, date, metric])
+  @@index([athleteId, date])
+  @@map("daily_vitals_metrics")
+}
 
 model StravaIntegration {
   id              String   @id @default(cuid())
